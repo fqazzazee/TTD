@@ -14,9 +14,10 @@ runs the frame loop. The interesting parts live next door —
     content.py   balance numbers, game modes, quotes
     terrain.py   the map format, the ground, and every battlefield on disk
     maps/*.map   the battlefields themselves, in plain text
-    story.py     the campaign: sixteen battles and what happened at them
+    story.py     the campaign: fourteen battles and what happened at them
     game.py      the rules, with no idea a terminal exists
     render.py    layout and drawing, with no idea of the rules
+    editor.py    drawing maps without leaving the game
     theme.py     what this particular terminal can draw, and in what colours
     audio.py     synthesised blips and 8-bit music, through any player found
     scores.py    the persistent leaderboard
@@ -34,6 +35,7 @@ import random
 import time
 
 import audio
+import editor
 import render
 import scores
 import story
@@ -274,14 +276,14 @@ def wait_for_room(scr, theme: Theme, wanted=None):
 # ---------------------------------------------------------------------------
 
 
-def run_campaign(scr, theme: Theme, mode, sound, board) -> str:
+def run_campaign(scr, theme: Theme, mode, sound, board, wanted=None) -> str:
     """Play `mode` until the player stops. Returns 'menu' or 'quit'.
 
-    Every run draws a fresh map, so the same rules are fought over different
-    ground each time.
+    `wanted` pins the battlefield; without one every run draws a fresh map,
+    which is what "a battlefield at random" on the select screen means.
     """
     while True:
-        chosen = wait_for_room(scr, theme)
+        chosen = wait_for_room(scr, theme, wanted)
         if chosen is None:
             return "quit"
 
@@ -403,6 +405,21 @@ def story_menu(scr, theme: Theme, sound, progress) -> str:
             return "quit"
 
 
+def skirmish(scr, theme: Theme, sound, board) -> str:
+    """One-off battles: pick the rules, then pick the ground."""
+    index = render.mode_screen(scr, theme, MODES)
+    if index is None:
+        return "menu"
+    if not terrain.MAPS:
+        return "menu"
+    chosen = render.map_screen(scr, theme, list(terrain.MAPS))
+    if chosen is None:
+        return "menu"
+    sound.play("select")
+    return run_campaign(scr, theme, MODES[index], sound, board,
+                        None if chosen == "random" else chosen)
+
+
 def record_run(scr, theme: Theme, board, g: Game, won: bool, sound) -> None:
     """File the run, and let the player sign it if it made the table."""
     entry = scores.Entry(name=scores.default_name(), mode=g.mode.name,
@@ -445,13 +462,13 @@ def app(scr) -> None:
                 render.help_screen(scr, theme)
             elif choice == "scores":
                 render.scores_screen(scr, theme, board, list(MODES))
+            elif choice == "editor":
+                editor.edit(scr, theme)
             elif choice == "story":
                 if story_menu(scr, theme, sound, progress) == "quit":
                     return
             elif choice == "play":
-                index = render.mode_screen(scr, theme, MODES)
-                if index is not None and run_campaign(
-                        scr, theme, MODES[index], sound, board) == "quit":
+                if skirmish(scr, theme, sound, board) == "quit":
                     return
     finally:
         sound.close()

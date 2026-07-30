@@ -13,10 +13,11 @@ import fcntl, os, pty, signal, struct, sys, termios, time
 ENTER, ESC = b"\r", b"\x1b"
 DOWN, UP = b"\x1bOB", b"\x1bOA"      # keypad(True) means application-cursor mode
 
-# Title -> SKIRMISH -> Classic -> the quote, skipped and then dismissed.
-# Every battle scenario starts with this, so when the menus move there is one
-# place to fix it.
-TO_BATTLE = [(1.0, [DOWN, ENTER]), (0.6, ENTER), (3.0, [ENTER, ENTER])]
+# Title -> SKIRMISH -> Classic -> a battlefield at random -> the quote, skipped
+# and then dismissed. Every battle scenario starts with this, so when the
+# menus move there is one place to fix it.
+TO_BATTLE = [(1.0, [DOWN, ENTER]), (0.6, ENTER), (0.8, ENTER),
+             (3.0, [ENTER, ENTER])]
 
 
 def run(name, cols, rows, script, env=None, seconds=0.6):
@@ -164,7 +165,7 @@ def quote_typewriter():
     `preview.py quote` to read the finished screen itself.
     """
     text = run("quote", 100, 30, [
-        (1.0, [DOWN, ENTER]), (0.6, ENTER),
+        (1.0, [DOWN, ENTER]), (0.6, ENTER), (0.8, ENTER),
         (6.0, ENTER),          # let the whole quote type itself
         (1.0, ENTER),          # then dismiss it
         (1.5, b"p"),
@@ -187,6 +188,38 @@ def campaign():
     return check("the campaign briefs a chapter and starts it", text,
                  ["THE CAMPAIGN", "battles won", "Marathon", "PAUSED"],
                  forbidden=["Traceback"])
+
+
+@scenario
+def map_choice():
+    """A skirmish can be pinned to one named battlefield."""
+    text = run("maps", 110, 34, [
+        (1.0, [DOWN, ENTER]),  # title: SKIRMISH
+        (0.6, ENTER),          # modes: Classic
+        (0.8, [DOWN, DOWN]),   # random -> Marathon -> Thermopylae
+        (0.5, ENTER),
+        (3.0, [ENTER, ENTER]),
+        (2.0, b"p"),
+    ])
+    return check("choosing a battlefield takes you to that one", text,
+                 ["CHOOSE A BATTLEFIELD", "Thermopylae", "PAUSED"],
+                 forbidden=["Traceback"])
+
+
+@scenario
+def editor_opens():
+    """The editor loads a map, paints, and validates without leaving curses."""
+    text = run("editor", 110, 30, [
+        (1.0, [DOWN, DOWN, DOWN, ENTER]),   # title: MAP EDITOR
+        (0.8, b"T"),                        # brush: forest
+        (0.4, b" "),                        # paint
+        (0.4, b"v"),                        # check the road
+        (0.8, b"?"),                        # the key list
+        (0.8, ESC),
+    ])
+    return check("the editor opens, paints and checks a map", text,
+                 ["MAP EDITOR", "BRUSH", "THE EDITOR"],
+                 forbidden=["Traceback", "curses.error"])
 
 
 if __name__ == "__main__":

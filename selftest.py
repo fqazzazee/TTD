@@ -21,6 +21,7 @@ import tempfile
 from types import SimpleNamespace
 
 import audio
+import editor as ED
 import render
 import story
 import terrain as TR
@@ -180,6 +181,46 @@ for c in chaps:
 check(prog.complete and all(prog.unlocked(c) for c in chaps),
       "and the whole campaign can be finished", f"{prog.done} battles")
 os.remove(prog.path)
+
+
+# ---------------------------------------------------------------------------
+print("\nthe editor")
+
+sheet = ED.Sheet("Scratch")
+check(sheet.check() and sheet.w == ED.NEW_W,
+      "a blank sheet has no road yet, and says so", sheet.check())
+sheet.paint(0, 0, "S")
+for x in range(1, sheet.w):
+    sheet.paint(0, x, "#")
+sheet.paint(0, sheet.w - 1, "E")
+check(not sheet.check(), "a road drawn from edge to edge validates",
+      sheet.check() or f"{sheet.w} cells")
+
+# Painting a second entrance moves the first rather than leaving two behind —
+# which is also how you drag either end of the road somewhere else.
+sheet.paint(0, 5, "S")
+counts = (sum(r.count("S") for r in sheet.rows()),
+          sum(r.count("E") for r in sheet.rows()))
+sheet.paint(0, 0, "S")
+check(counts == (1, 1) and not sheet.check(),
+      "there is only ever one entrance and one base",
+      f"S x{counts[0]}, E x{counts[1]} after moving the entrance")
+
+before = sheet.rows()
+sheet.paint(4, 4, "T")
+check(sheet.restore() and sheet.rows() == before, "undo puts it back")
+check(sheet.resize(2, 1) and sheet.w == ED.NEW_W + 2
+      and sheet.h == ED.NEW_H + 1 and len(set(map(len, sheet.rows()))) == 1,
+      "resizing keeps every row the same length",
+      f"{sheet.w}x{sheet.h}")
+check(not sheet.resize(-500, 0) and sheet.w == ED.NEW_W + 2,
+      "and refuses to shrink a map out of existence")
+check(sheet.filename() == "scratch.map",
+      "the file it would write is named after the battle", sheet.filename())
+round_trip = TR.parse(ED.Sheet.load(MAPS[2]).to_text())
+check(round_trip.grid == MAPS[2].grid and round_trip.name == MAPS[2].name,
+      "opening a shipped map in the editor and writing it back changes nothing",
+      MAPS[2].name)
 
 
 # ---------------------------------------------------------------------------
