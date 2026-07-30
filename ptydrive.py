@@ -8,10 +8,16 @@ Dev tool. Each scenario is a window size and a script of (delay, keys); after
 the last one the screen is read back and grepped for the things that scenario
 is supposed to prove. Nothing here is imported by the game.
 """
-import fcntl, os, pty, re, signal, struct, sys, termios, time
+import fcntl, os, pty, signal, struct, sys, termios, time
 
 ENTER, ESC = b"\r", b"\x1b"
 DOWN, UP = b"\x1bOB", b"\x1bOA"      # keypad(True) means application-cursor mode
+
+# Title -> SKIRMISH -> Classic -> a battlefield at random -> the quote, skipped
+# and then dismissed. Every battle scenario starts with this, so when the
+# menus move there is one place to fix it.
+TO_BATTLE = [(1.0, [DOWN, ENTER]), (0.6, ENTER), (0.8, ENTER),
+             (3.0, [ENTER, ENTER])]
 
 
 def run(name, cols, rows, script, env=None, seconds=0.6):
@@ -83,10 +89,7 @@ def scenario(fn):
 @scenario
 def pause_menu():
     """P opens the menu, arrows move in it, ESC puts you back in the battle."""
-    text = run("pause", 110, 32, [
-        (1.0, ENTER),          # title: PLAY
-        (0.6, ENTER),          # modes: Classic
-        (3.0, [ENTER, ENTER]), # skip the typewriter, then dismiss it
+    text = run("pause", 110, 32, TO_BATTLE + [
         (2.0, b"p"),           # into the battle, then pause
         (0.8, [DOWN, DOWN]),   # down to MUSIC
         (0.5, ENTER),          # toggle it
@@ -100,8 +103,7 @@ def pause_menu():
 @scenario
 def abandon():
     """ABANDON THE RUN walks back to the title screen instead of quitting."""
-    text = run("abandon", 110, 32, [
-        (1.0, ENTER), (0.6, ENTER), (3.0, [ENTER, ENTER]),
+    text = run("abandon", 110, 32, TO_BATTLE + [
         (2.0, b"p"),
         (0.8, [DOWN] * 4),     # RESUME -> SOUND -> MUSIC -> HOW TO PLAY -> ABANDON
         (0.5, ENTER),
@@ -114,8 +116,7 @@ def abandon():
 @scenario
 def help_from_pause():
     """The controls are reachable without leaving the run."""
-    text = run("help", 110, 34, [
-        (1.0, ENTER), (0.6, ENTER), (3.0, [ENTER, ENTER]),
+    text = run("help", 110, 34, TO_BATTLE + [
         (2.0, b"p"),
         (0.8, [DOWN] * 3),
         (0.5, ENTER),
@@ -129,8 +130,7 @@ def help_from_pause():
 @scenario
 def ascii_tier():
     """The whole thing still runs with no Unicode at all."""
-    text = run("ascii", 100, 30, [
-        (1.0, ENTER), (0.6, ENTER), (3.0, [ENTER, ENTER]),
+    text = run("ascii", 100, 30, TO_BATTLE + [
         (2.0, b"p"),
         (1.0, ESC),
         (1.0, b""),
@@ -142,8 +142,7 @@ def ascii_tier():
 @scenario
 def no_crash_at_speed():
     """Four times speed for a while, with a pause in the middle of it."""
-    text = run("speed", 120, 36, [
-        (1.0, ENTER), (0.6, ENTER), (3.0, [ENTER, ENTER]),
+    text = run("speed", 120, 36, TO_BATTLE + [
         (0.5, [b"+"] * 4),
         (6.0, b"p"),
         (0.8, ESC),
@@ -166,7 +165,7 @@ def quote_typewriter():
     `preview.py quote` to read the finished screen itself.
     """
     text = run("quote", 100, 30, [
-        (1.0, ENTER), (0.6, ENTER),
+        (1.0, [DOWN, ENTER]), (0.6, ENTER), (0.8, ENTER),
         (6.0, ENTER),          # let the whole quote type itself
         (1.0, ENTER),          # then dismiss it
         (1.5, b"p"),
@@ -175,6 +174,52 @@ def quote_typewriter():
                  ["BEFORE THE BATTLE", "any key to take the field",
                   "PAUSED", "RESUME"],
                  forbidden=["Traceback"])
+
+
+@scenario
+def campaign():
+    """The campaign opens on its first battle and briefs before it starts."""
+    text = run("story", 110, 34, [
+        (1.0, ENTER),          # title: THE CAMPAIGN
+        (1.0, ENTER),          # the chapter list: whatever is unlocked
+        (1.2, ENTER),          # the briefing
+        (2.0, b"p"),
+    ], env={"TTD_STORY": "/dev/null"})
+    return check("the campaign briefs a chapter and starts it", text,
+                 ["THE CAMPAIGN", "battles won", "Marathon", "PAUSED"],
+                 forbidden=["Traceback"])
+
+
+@scenario
+def map_choice():
+    """A skirmish can be pinned to one named battlefield."""
+    text = run("maps", 110, 34, [
+        (1.0, [DOWN, ENTER]),  # title: SKIRMISH
+        (0.6, ENTER),          # modes: Classic
+        (0.8, [DOWN, DOWN]),   # random -> Marathon -> Thermopylae
+        (0.5, ENTER),
+        (3.0, [ENTER, ENTER]),
+        (2.0, b"p"),
+    ])
+    return check("choosing a battlefield takes you to that one", text,
+                 ["CHOOSE A BATTLEFIELD", "Thermopylae", "PAUSED"],
+                 forbidden=["Traceback"])
+
+
+@scenario
+def editor_opens():
+    """The editor loads a map, paints, and validates without leaving curses."""
+    text = run("editor", 110, 30, [
+        (1.0, [DOWN, DOWN, DOWN, ENTER]),   # title: MAP EDITOR
+        (0.8, b"T"),                        # brush: forest
+        (0.4, b" "),                        # paint
+        (0.4, b"v"),                        # check the road
+        (0.8, b"?"),                        # the key list
+        (0.8, ESC),
+    ])
+    return check("the editor opens, paints and checks a map", text,
+                 ["MAP EDITOR", "BRUSH", "THE EDITOR"],
+                 forbidden=["Traceback", "curses.error"])
 
 
 if __name__ == "__main__":

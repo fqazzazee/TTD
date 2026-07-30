@@ -916,9 +916,11 @@ def _menu_rows(scr, theme: Theme, y: int, items, selected: int, width: int) -> N
 
 
 def title_screen(scr, theme: Theme) -> str:
-    """The front door. Returns 'play', 'scores', 'help' or 'quit'."""
-    items = ["PLAY", "HIGH SCORES", "HOW TO PLAY", "QUIT"]
-    actions = ["play", "scores", "help", "quit"]
+    """The front door. Returns 'story', 'play', 'scores', 'editor', 'help'
+    or 'quit'."""
+    items = ["THE CAMPAIGN", "SKIRMISH", "HIGH SCORES", "MAP EDITOR",
+             "HOW TO PLAY", "QUIT"]
+    actions = ["story", "play", "scores", "editor", "help", "quit"]
     sel = 0
     scr.timeout(120)
     tick = 0
@@ -1147,6 +1149,274 @@ def help_screen(scr, theme: Theme) -> None:
         if key == 27 or page + 1 >= len(pages):
             return
         page += 1
+
+
+# ---------------------------------------------------------------------------
+# Choosing where to fight
+# ---------------------------------------------------------------------------
+
+
+def thumbnail(scr, theme: Theme, field_, y: int, x: int,
+              max_h: int, max_w: int) -> tuple[int, int]:
+    """A small picture of a battlefield. Returns the (rows, cols) it used.
+
+    Drawn from exactly the same three things the real board is — the ground,
+    its ramp, its relief — at one column per cell and, when the map is bigger
+    than the space, sampled every nth cell. Coarse, but a coastline still
+    looks like a coastline and a wood still looks like a wood, which is the
+    entire question the player is asking at this screen.
+    """
+    step = max(1, -(-field_.w // max(1, max_w)), -(-field_.h // max(1, max_h)))
+    rows = cols = 0
+    for ry in range(0, field_.h, step):
+        sy = y + ry // step
+        run, run_attr, run_x = [], None, 0
+        cols = 0
+        for rx in range(0, field_.w, step):
+            ink = field_.ink(ry, rx)
+            attr = theme.land(ink, field_.relief[ry][rx])
+            if attr != run_attr:
+                if run:
+                    put(scr, sy, x + run_x, "".join(run), run_attr)
+                run, run_attr, run_x = [], attr, cols
+            run.append(theme.tile(ink, ry, rx))
+            cols += 1
+        if run:
+            put(scr, sy, x + run_x, "".join(run), run_attr)
+        rows += 1
+
+    for (cy, cx), glyph, fg, bg in ((field_.path[0], theme.g["start"],
+                                     "start_fg", "start_bg"),
+                                    (field_.path[-1], theme.g["base"],
+                                     "base_fg", "base_bg")):
+        put(scr, y + cy // step, x + cx // step, glyph,
+            theme.ink(fg, bg, bold=True))
+    return rows, cols
+
+
+def _terrain_strip(theme: Theme, field_):
+    """What a map is made of, as coloured fragments — 'grass, wood, marsh'."""
+    out = []
+    for t, _ in field_.census()[:4]:
+        out.append((theme.tile(t.ink, 0, 3) if theme.tile(t.ink, 0, 3).strip()
+                    else theme.g["dot"], theme.land(t.ink, 1)))
+        out.append((" " + t.name + "  ", theme.ink("panel", dim=True)))
+    return out
+
+
+def _scroll(count: int, selected: int, room: int) -> tuple[int, int]:
+    """A window of `room` rows over `count` items that keeps `selected` in it."""
+    room = max(1, min(room, count))
+    top = max(0, min(selected - room // 2, count - room))
+    return top, top + room
+
+
+def map_screen(scr, theme: Theme, maps, title: str = "CHOOSE A BATTLEFIELD"):
+    """Pick a map. Returns a MapDef, None to go back, or "random"."""
+    sel = 0
+    scr.timeout(-1)
+    while True:
+        rows_n, cols = scr.getmaxyx()
+        width = min(cols - 4, 66)
+        left = max(1, (cols - width) // 2)
+        listing = ["a battlefield at random"] + [m.name for m in maps]
+        room = max(3, rows_n - 16)
+        top, end = _scroll(len(listing), sel, room)
+
+        scr.erase()
+        center(scr, 1, title, theme.ink("title", bold=True), cols)
+        center(scr, 2, theme.g["rule"] * width, theme.ink("frame", dim=True), cols)
+
+        y = 4
+        for i in range(top, end):
+            chosen = i == sel
+            m = None if i == 0 else maps[i - 1]
+            frags(scr, y, left, [
+                (f" {theme.g['arrow']} " if chosen else "   ",
+                 theme.ink("accent", bold=True)),
+                (listing[i].ljust(16),
+                 theme.ink("text", bold=True) if chosen else theme.ink("panel")),
+                ((m.when if m else "").ljust(9), theme.ink("panel", dim=True)),
+                ((f"{m.w}x{m.h}" if m else ""), theme.ink("ghost", dim=True)),
+            ], width)
+            y += 1
+        if end < len(listing) or top:
+            center(scr, y, f"{sel + 1} / {len(listing)}",
+                   theme.ink("ghost", dim=True), cols)
+        y += 2
+
+        m = None if sel == 0 else maps[sel - 1]
+        if m is not None:
+            body = [[(m.subtitle, theme.ink("accent"))],
+                    [(m.who[:width - 6], theme.ink("panel", dim=True))],
+                    []]
+            body += [[(line, theme.ink("quote"))]
+                     for line in textwrap.wrap(m.brief, width - 6)
+                     [:max(2, rows_n - y - 12)]]
+            body += [[], _terrain_strip(theme, m)]
+            y = panel(scr, theme, y, left, width, m.name.upper(), body)
+            thumb_h = max(0, rows_n - y - 3)
+            if thumb_h >= 4:
+                thumbnail(scr, theme, m, y + 1,
+                          left + max(0, (width - min(m.w, width)) // 2),
+                          thumb_h, width)
+        else:
+            panel(scr, theme, y, left, width, "RANDOM", [
+                [("The largest map your window can hold, chosen fresh",
+                  theme.ink("quote"))],
+                [("for every run.", theme.ink("quote"))]])
+
+        center(scr, rows_n - 2, "ENTER to march   ·   ESC to go back",
+               theme.ink("ghost", dim=True), cols)
+        scr.refresh()
+
+        key = scr.getch()
+        if key in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % len(listing)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % len(listing)
+        elif key in (curses.KEY_ENTER, 10, 13, ord(" ")):
+            return "random" if sel == 0 else maps[sel - 1]
+        elif key in (27, ord("q"), ord("Q")):
+            return None
+
+
+def story_screen(scr, theme: Theme, chapters, progress):
+    """The campaign menu. Returns a chapter index, or None to go back.
+
+    A locked chapter is still listed — the point of a campaign is that you
+    can see how far it goes — but it will not open, and it keeps its briefing
+    to itself.
+    """
+    sel = min(range(len(chapters)),
+              key=lambda i: (progress.is_cleared(chapters[i]), i)) \
+        if chapters else 0
+    scr.timeout(-1)
+    while True:
+        rows_n, cols = scr.getmaxyx()
+        width = min(cols - 4, 66)
+        left = max(1, (cols - width) // 2)
+        scr.erase()
+
+        if not chapters:
+            center(scr, rows_n // 2, "no battlefields installed",
+                   theme.ink("warn", bold=True), cols)
+            center(scr, rows_n // 2 + 2, "any key to go back",
+                   theme.ink("ghost", dim=True), cols)
+            scr.refresh()
+            scr.getch()
+            return None
+
+        done = progress.done
+        center(scr, 1, "THE CAMPAIGN", theme.ink("title", bold=True), cols)
+        center(scr, 2, f"{done} of {len(chapters)} battles won",
+               theme.ink("panel"), cols)
+
+        room = max(4, rows_n - 17)
+        top, end = _scroll(len(chapters), sel, room)
+        y = 4
+        for i in range(top, end):
+            ch = chapters[i]
+            cleared = progress.is_cleared(ch)
+            open_ = progress.unlocked(ch)
+            chosen = i == sel
+            best = progress.best.get(ch.map_name, 0)
+            frags(scr, y, left, [
+                (f" {theme.g['arrow']} " if chosen else "   ",
+                 theme.ink("accent", bold=True)),
+                (ch.order.rjust(4) + "  ",
+                 theme.ink("gold" if cleared else "ghost", dim=not open_)),
+                (ch.map_name.ljust(15),
+                 theme.ink("text", bold=True) if chosen
+                 else theme.ink("panel" if open_ else "ghost", dim=not open_)),
+                ((ch.field.when if ch.field else "").ljust(8),
+                 theme.ink("ghost", dim=True)),
+                (theme.g["tick"] + " " if cleared
+                 else ("  " if open_ else theme.g["cross"] + " "),
+                 theme.ink("good" if cleared else "ghost", dim=True)),
+                (f"{best:,}" if best else "", theme.ink("gold", dim=True)),
+            ], width)
+            y += 1
+        if end < len(chapters) or top:
+            center(scr, y, f"{sel + 1} / {len(chapters)}",
+                   theme.ink("ghost", dim=True), cols)
+        y += 2
+
+        ch = chapters[sel]
+        m, dim = ch.field, theme.ink("panel", dim=True)
+        if not progress.unlocked(ch):
+            body = [[("win the battle before it to open this one", dim)]]
+        else:
+            body = [[(ch.title, theme.ink("accent", bold=True)),
+                     (f"   {m.subtitle}" if m else "", dim)]]
+            # However many lines of briefing the window can spare, and never
+            # a sentence cut off halfway because the panel was a fixed size.
+            body += [[(line, theme.ink("quote"))]
+                     for line in textwrap.wrap(ch.brief, width - 6)
+                     [:max(2, rows_n - y - 9)]]
+            body += [[], [("hold ", dim),
+                          (f"{ch.mode.target} waves", theme.ink("text")),
+                          ("   lives ", dim),
+                          (str(ch.mode.lives), theme.ink("life")),
+                          ("   gold ", dim),
+                          (str(ch.mode.gold), theme.ink("gold"))]]
+        y = panel(scr, theme, y, left, width, ch.map_name.upper(), body)
+        if m is not None and rows_n - y - 3 >= 4:
+            thumbnail(scr, theme, m, y + 1, left, rows_n - y - 3, width)
+
+        center(scr, rows_n - 2, "ENTER to take the field   ·   ESC to go back",
+               theme.ink("ghost", dim=True), cols)
+        scr.refresh()
+
+        key = scr.getch()
+        if key in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % len(chapters)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % len(chapters)
+        elif key in (curses.KEY_ENTER, 10, 13, ord(" ")):
+            if progress.unlocked(chapters[sel]):
+                return sel
+        elif key in (27, ord("q"), ord("Q")):
+            return None
+
+
+def brief_screen(scr, theme: Theme, header: str, header_attr: int,
+                 field_, title: str, text: str, footer: str) -> int:
+    """The page between the campaign menu and the fighting.
+
+    The map is drawn full size here, because this is the last moment before
+    the shooting starts at which anybody has time to look at the ground.
+    """
+    scr.timeout(-1)
+    while True:
+        rows_n, cols = scr.getmaxyx()
+        width = min(cols - 4, 66)
+        left = max(1, (cols - width) // 2)
+        scr.erase()
+
+        center(scr, 1, header, header_attr, cols)
+        if field_ is not None:
+            center(scr, 2, f"{field_.name}  ·  {field_.subtitle}",
+                   theme.ink("panel"), cols)
+        center(scr, 3, theme.g["rule"] * width, theme.ink("frame", dim=True), cols)
+
+        y = 5
+        lines = textwrap.wrap(text, width - 6)
+        room = max(2, rows_n - 12)
+        y = panel(scr, theme, y, left, width, title.upper(),
+                  [[(line, theme.ink("quote"))] for line in lines[:room]]
+                  + ([[], [(field_.who, theme.ink("panel", dim=True))]]
+                     if field_ is not None and field_.who else []))
+
+        if field_ is not None and rows_n - y - 3 >= 4:
+            thumbnail(scr, theme, field_, y + 1, left,
+                      rows_n - y - 3, width)
+        center(scr, rows_n - 2, footer, theme.ink("ghost", dim=True), cols)
+        scr.refresh()
+
+        key = scr.getch()
+        if key != curses.KEY_RESIZE:
+            return key
 
 
 # ---------------------------------------------------------------------------
