@@ -916,9 +916,11 @@ def _menu_rows(scr, theme: Theme, y: int, items, selected: int, width: int) -> N
 
 
 def title_screen(scr, theme: Theme) -> str:
-    """The front door. Returns 'story', 'play', 'scores', 'help' or 'quit'."""
-    items = ["THE CAMPAIGN", "SKIRMISH", "HIGH SCORES", "HOW TO PLAY", "QUIT"]
-    actions = ["story", "play", "scores", "help", "quit"]
+    """The front door. Returns 'story', 'play', 'scores', 'editor', 'help'
+    or 'quit'."""
+    items = ["THE CAMPAIGN", "SKIRMISH", "HIGH SCORES", "MAP EDITOR",
+             "HOW TO PLAY", "QUIT"]
+    actions = ["story", "play", "scores", "editor", "help", "quit"]
     sel = 0
     scr.timeout(120)
     tick = 0
@@ -1207,6 +1209,76 @@ def _scroll(count: int, selected: int, room: int) -> tuple[int, int]:
     room = max(1, min(room, count))
     top = max(0, min(selected - room // 2, count - room))
     return top, top + room
+
+
+def map_screen(scr, theme: Theme, maps, title: str = "CHOOSE A BATTLEFIELD"):
+    """Pick a map. Returns a MapDef, None to go back, or "random"."""
+    sel = 0
+    scr.timeout(-1)
+    while True:
+        rows_n, cols = scr.getmaxyx()
+        width = min(cols - 4, 66)
+        left = max(1, (cols - width) // 2)
+        listing = ["a battlefield at random"] + [m.name for m in maps]
+        room = max(3, rows_n - 16)
+        top, end = _scroll(len(listing), sel, room)
+
+        scr.erase()
+        center(scr, 1, title, theme.ink("title", bold=True), cols)
+        center(scr, 2, theme.g["rule"] * width, theme.ink("frame", dim=True), cols)
+
+        y = 4
+        for i in range(top, end):
+            chosen = i == sel
+            m = None if i == 0 else maps[i - 1]
+            frags(scr, y, left, [
+                (f" {theme.g['arrow']} " if chosen else "   ",
+                 theme.ink("accent", bold=True)),
+                (listing[i].ljust(16),
+                 theme.ink("text", bold=True) if chosen else theme.ink("panel")),
+                ((m.when if m else "").ljust(9), theme.ink("panel", dim=True)),
+                ((f"{m.w}x{m.h}" if m else ""), theme.ink("ghost", dim=True)),
+            ], width)
+            y += 1
+        if end < len(listing) or top:
+            center(scr, y, f"{sel + 1} / {len(listing)}",
+                   theme.ink("ghost", dim=True), cols)
+        y += 2
+
+        m = None if sel == 0 else maps[sel - 1]
+        if m is not None:
+            body = [[(m.subtitle, theme.ink("accent"))],
+                    [(m.who[:width - 6], theme.ink("panel", dim=True))],
+                    []]
+            body += [[(line, theme.ink("quote"))]
+                     for line in textwrap.wrap(m.brief, width - 6)
+                     [:max(2, rows_n - y - 12)]]
+            body += [[], _terrain_strip(theme, m)]
+            y = panel(scr, theme, y, left, width, m.name.upper(), body)
+            thumb_h = max(0, rows_n - y - 3)
+            if thumb_h >= 4:
+                thumbnail(scr, theme, m, y + 1,
+                          left + max(0, (width - min(m.w, width)) // 2),
+                          thumb_h, width)
+        else:
+            panel(scr, theme, y, left, width, "RANDOM", [
+                [("The largest map your window can hold, chosen fresh",
+                  theme.ink("quote"))],
+                [("for every run.", theme.ink("quote"))]])
+
+        center(scr, rows_n - 2, "ENTER to march   ·   ESC to go back",
+               theme.ink("ghost", dim=True), cols)
+        scr.refresh()
+
+        key = scr.getch()
+        if key in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % len(listing)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % len(listing)
+        elif key in (curses.KEY_ENTER, 10, 13, ord(" ")):
+            return "random" if sel == 0 else maps[sel - 1]
+        elif key in (27, ord("q"), ord("Q")):
+            return None
 
 
 def story_screen(scr, theme: Theme, chapters, progress):
