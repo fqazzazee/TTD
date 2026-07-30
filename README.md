@@ -1,7 +1,8 @@
 # TTD — Terminal Tower Defense
 
-A real-time tower defense game that runs in your terminal. Pure Python standard
-library, no dependencies, no install.
+A real-time tower defense game that runs in your terminal, fought over sixteen
+real battlefields from Marathon to Dien Bien Phu. Pure Python standard library,
+no dependencies, no install.
 
 ```
 python3 ttd.py
@@ -14,7 +15,7 @@ gets a smaller map with a compact HUD, and resizing mid-battle is fine.
 ## Playing
 
 Creeps walk the road from the entrance `»` to your base `⌂`. You spend gold on
-towers placed on the grass beside it. Everything that gets through costs you
+towers placed on the ground beside it. Everything that gets through costs you
 lives; at zero the run ends.
 
 | Key | Action |
@@ -28,6 +29,12 @@ lives; at zero the run ends.
 | `+` `-` | run the battle faster or slower — 1x up to 4x |
 | `S` `M` | mute the lot (cues, music, announcer), or just the music |
 | `P` / `Esc` / `Q` | the pause menu |
+
+Ground beside the road is not all the same. Most of a real battlefield is
+wood, bog, water or rock, and none of it will take a gun; what is left is
+worth arguing over. A weapon standing **wholly** on high ground sees further
+than the same weapon on the flat, which is why armies spend so much of their
+time walking uphill.
 
 ### What you build
 
@@ -140,7 +147,42 @@ veterans, four times and they are elites. In Classic that is wave 6 and wave 11;
 in Gauntlet, which escalates faster, wave 5 and wave 8. It is a matter of
 appearance only — the danger was already in the health multiplier.
 
-### Modes
+### The campaign
+
+Sixteen battles, in the order they happened, from Marathon to Dien Bien Phu.
+Each one is its own battlefield with its own rules, and the rules are picked
+so that whatever decided the real thing decides this one too.
+
+| | | |
+| --- | --- | --- |
+| I | **Marathon** | 490 BC — a short field and time to think |
+| II | **Thermopylae** | 480 BC — almost no ground to build on, and it does not matter |
+| III | **Gaugamela** | 331 BC — the biggest waves in the game across the flattest map |
+| IV | **Cannae** | 216 BC — money for a deep line, and the sides are where you lose it |
+| V | **Alesia** | 52 BC — the longest road in the game, walked from the outside in |
+| VI | **Teutoburg** | AD 9 — little money, less warning, and trees on both sides |
+| VII | **Hastings** | 1066 — a ridge worth reach, and a marsh for anyone who leaves it |
+| VIII | **Agincourt** | 1415 — mud: everything slow, and a funnel pays for itself |
+| IX | **Waterloo** | 1815 — hold until nightfall, and not one wave longer |
+| X | **Gettysburg** | 1863 — a fishhook, and the hills that hold its ends |
+| XI | **Rorke's Drift** | 1879 — one small perimeter, overlooked, all night |
+| XII | **Midway** | 1942 — one island, no room, no second chance |
+| XIII | **El Alamein** | 1942 — supplies, and plenty of them, for the first time |
+| XIV | **Stalingrad** | 1942 — rubble to build in, ruins you cannot, no room to give |
+| XV | **Kursk** | 1943 — they know you are coming, and you get to dig first |
+| XVI | **Dien Bien Phu** | 1954 — the valley floor, and they hold every hill above it |
+
+Every chapter ends: hold the stated number of waves and it is won, and
+winning opens the next. Losing takes nothing away — the chapter is still
+there, and so is everything you cleared before it. Progress lives in
+`~/.local/share/ttd/story.json` (override with `TTD_STORY`).
+
+There is a page of history before each battle and another one after it. They
+are short on purpose: a briefing, not a lecture.
+
+### Skirmish
+
+One-off battles, on any map you like, under one of four sets of rules:
 
 | Mode | |
 | --- | --- |
@@ -149,9 +191,9 @@ appearance only — the danger was already in the health multiplier.
 | **Gauntlet** | hold for 20 waves and you win; the only mode with an ending |
 | **Last Stand** | three lives, plenty of gold, no mercy |
 
-Each run picks a map at random from the largest size class your window can
-display, so a bigger terminal means a bigger battle rather than just more
-whitespace.
+Pick the battlefield yourself, or leave it on *a battlefield at random* and
+every run draws the largest map your window can hold — so a bigger terminal
+means a bigger battle rather than just more whitespace.
 
 The speed dial only buys you time. Everything in the simulation is clocked off
 one scaled game clock, and long steps are chopped up before they are simulated,
@@ -228,9 +270,13 @@ know a terminal exists, and the renderer does not know the rules.
 | File | |
 | --- | --- |
 | `ttd.py` | owns the terminal, moves between screens, runs the frame loop |
-| `content.py` | every number, map and word — balance, modes, maps, quotes |
+| `content.py` | balance, modes and the words between the fighting |
+| `terrain.py` | the map format: ground, the road tracer, relief, loading |
+| `maps/*.map` | the battlefields themselves, in plain text |
+| `story.py` | the campaign, and what is remembered between runs |
 | `game.py` | the simulation: creeps, towers, waves, gold, lives |
 | `render.py` | layout and drawing, including the menus and the typewriter |
+| `editor.py` | drawing maps without leaving the game |
 | `theme.py` | what this terminal can draw, and in what colours |
 | `audio.py` | synthesised blips and the chiptune, through whatever player exists |
 | `scores.py` | the persistent leaderboard |
@@ -238,14 +284,20 @@ know a terminal exists, and the renderer does not know the rules.
 | `preview.py` | dev tool: renders one screen and prints it as text |
 | `ptydrive.py` | dev tool: plays the real game in a pty and greps the screen |
 
-To change how the game *plays*, you only need `content.py`.
+To change how the game *plays*, you need `content.py`. To change *where* it is
+played, you need a text editor and the `maps/` directory.
 
 ```
-python3 selftest.py          # maps trace, layouts fit, the game can be lost
+python3 selftest.py                # maps trace, layouts fit, the game can be lost
+python3 terrain.py                 # list every map, and say what is wrong with the bad ones
+python3 terrain.py Cannae          # print one, header and all
+python3 editor.py                  # the map editor on its own
 python3 preview.py board 120 34    # battlefield mid-firefight
-python3 preview.py level 110 30    # Gauntlet, with the run progress bar
+python3 preview.py map:Midway 120 34    # any battlefield by name
+python3 preview.py story 90 34     # the campaign menu
+python3 preview.py maps 90 34      # the battlefield chooser
+python3 preview.py editor 110 30   # the map editor
 python3 preview.py compact 60 16   # the narrow HUD
-python3 preview.py title 80 24
 python3 preview.py elite 120 36    # a wave-12 board: elites and a Warlord
 python3 preview.py pause 120 36    # the pause menu over a frozen battle
 python3 ptydrive.py                # drives the real binary through the menus
@@ -253,28 +305,151 @@ python3 ptydrive.py                # drives the real binary through the menus
 
 ## Drawing a map
 
-Maps are ASCII art in `content.MAPS`. `S` is the entrance, `E` your base, `#`
-is road and `.` is buildable grass. Short rows are padded with grass, so the
-art only has to be exact where the road is.
+A map is a text file. Open `maps/06-hastings.map` in anything and you will see
+the whole format:
 
-Draw a single-width corridor with no forks and the loader traces it into a
-route by itself — there is no pathfinding anywhere else in the game. `selftest.py`
-will tell you if a corridor is broken, and where.
+```
+name: Hastings
+when: 1066
+where: Senlac Hill, Sussex
+who: Harold's housecarls vs William of Normandy
+road: mud
+brief: Harold held the ridge with a shield wall and lost it to a feigned
+---
+S####################################
+...TTTT.......................T.....#
+....................................#
+#####################################
+#..hhhhhhhhhhhhhhhhhhhhhhhhhhhh......#
+```
+
+A few `key: value` lines, a line of `---`, and then the ground. Only `name` is
+required; a file with no header at all is read as pure art and named after
+itself.
+
+### The alphabet
+
+| | | |
+| --- | --- | --- |
+| `S` | the entrance | creeps walk in here |
+| `E` | your base | and this is what they are walking to |
+| `#` | road | you cannot build on it |
+| `.` | grass | open ground |
+| `,` | sand | open ground |
+| `"` | scrub | open ground — dry steppe |
+| `*` | snow | open ground |
+| `:` | rubble | open ground — broken stone, still firm |
+| `h` | hill | open ground, **and weapons on it see further** |
+| `T` | forest | blocked |
+| `^` | mountain | blocked |
+| `~` | water | blocked |
+| `%` | marsh | blocked |
+| `=` | ruins | blocked |
+
+Short rows are padded out with the map's own ground (set `fill:` to choose
+which), so the art only has to be exact where the road and the scenery are.
+`road:` picks how the road looks — `dust`, `mud`, `stone`, `snow`, `sand`,
+`water` or `grass` — and is cosmetic; every road plays the same.
+
+### The one rule
+
+Draw a single-width corridor from `S` to `E` with no forks, and the loader
+traces it into a route by itself. That trace is the only pathfinding anywhere
+in the game. Two road cells that touch but are not consecutive are a fork, and
+a fork has no answer to "where does this creep go next", so leave at least one
+cell of ground between parallel stretches of road.
+
+```
+python3 terrain.py
+```
+
+lists every map it can find and, for the ones it cannot load, says which row
+and column to look at. A broken map is set aside; it never takes the game
+down with it.
 
 Creep speed is scaled by path length, so a map four times longer does not make
-the game four times easier. Add maps in whatever size you like.
+the game four times easier. Draw them in whatever size you like — anything
+from 10x5 up to 220x90.
+
+### Where maps come from
+
+Two directories are read, in order, and the later one wins a name clash:
+
+```
+./maps/                       what ships with the game
+~/.local/share/ttd/maps/      yours
+```
+
+So dropping your own `Cannae.map` in the second one quietly replaces the one
+that ships; deleting it puts the original back. `TTD_MAPS` (colon-separated)
+replaces the search path entirely.
+
+## The map editor
+
+`MAP EDITOR` on the title screen, or `python3 editor.py` on its own.
+
+Everything it does you could do in a text editor. What it adds is that you see
+the ground lit the way the game will light it, and it tells you the moment the
+road stops joining up.
+
+The brush is a map character and you choose it by typing it: `T` paints a
+wood, `~` water, `^` mountains, `#` road. Which means the arrow keys do the
+moving, since `h` is a hill here and not a direction.
+
+| Key | |
+| --- | --- |
+| arrows | move |
+| `Space` | paint  ·  `Tab` cycles the brush |
+| `D` | keep painting as you move |
+| `[` `]` `{` `}` | wider, narrower, taller, shorter |
+| `V` | check that the road joins up |
+| `W` | write it to disk |
+| `U` | undo |
+| `N` `O` `M` | new  ·  open  ·  name and notes |
+| `?` | the key list |
+| `Esc` | leave |
+
+Saved maps go to `~/.local/share/ttd/maps/`, so they are picked up by the map
+chooser the next time you look at it.
+
+## How it looks
+
+The board is flat characters, so height has to be faked, and it is faked the
+way a painting fakes it: one light source that never moves.
+
+Every kind of ground carries three colours — the face in shadow, the face
+lying flat, the face catching the light — and each cell picks one of the three
+from how tall its neighbours are. The light comes from the top left, always,
+so a cell below or to the right of something taller sits in its shadow and a
+cell that rises above its neighbours takes the light on its near edge. That is
+the whole trick, and it is worked out once when the map loads, because terrain
+does not move.
+
+Everything else follows from it. Mountains cast further than hills. A wood has
+a dark side. A shoreline reads as an edge instead of a colour change. Anything
+you build gets a lit lip along its top and throws its own shadow onto the
+ground down and to the right — the one thing that most makes a tower look like
+it is standing on the field rather than printed on it. Water and marsh are the
+only ground that moves.
+
+Flat country is mottled rather than uniform, from a hash of each cell's
+coordinates, so an open plain has texture without ever flickering between
+frames.
 
 ## If it looks wrong
 
 The game picks the best of three tiers at start-up: Unicode with 256 colours,
-Unicode with 8, or plain ASCII with none. If your font renders the geometric
-shapes double-width and skews the board, force the bottom tier:
+Unicode with 8, or plain ASCII with none. In the eight-colour tier the three
+shades collapse into dim, plain and bold, which says less but says the same
+thing. If your font renders the geometric shapes double-width and skews the
+board, force the bottom tier:
 
 ```
 TTD_ASCII=1 python3 ttd.py
 TTD_SILENT=1 python3 ttd.py      # no sound at all
 TTD_NOMUSIC=1 python3 ttd.py     # cues, but no music
 TTD_NOVOICE=1 python3 ttd.py     # no spoken announcements
+TTD_MAPS=~/battles python3 ttd.py    # read maps from somewhere else entirely
 ```
 
 In the ASCII tier the creeps keep their three ranks as letters and symbols —
