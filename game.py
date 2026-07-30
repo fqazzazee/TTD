@@ -17,8 +17,13 @@ Three resources are in tension, and that tension is the game:
     gold    earned from kills and cleared waves
     power   generators supply it, weapons draw it, and a deficit browns the
             whole defense out rather than switching anything off
-    ground  a Cannon stands on four cells, a Gun on one — the good spots by
-            the road are finite
+    ground  a Cannon stands on four cells, a Gun on one — and on a real
+            battlefield most of the ground is a wood, a bog or the sea, so
+            the spots you can actually use are fewer than they look
+
+The map is the fourth resource, really. `terrain.py` says which cells will
+take a building and which will not, and standing a weapon on high ground
+buys it reach — which is the whole reason armies fight over ridges.
 
 Player actions return the name of a sound cue (or None), which is the only
 concession this module makes to the rest of the program.
@@ -32,8 +37,8 @@ from dataclasses import dataclass, field
 from content import (BUILDINGS, ENEMIES, MIN_POWER_RATIO, SPEEDS, BuildSpec,
                      EnemySpec, Mode, Tier, build_wave, is_boss_wave, menace,
                      wave_bounty)
+from terrain import PATH_CHARS, MapDef, Terrain
 
-PATH_CHARS = "S#E"
 SELL_REFUND = 0.6
 
 # Creep speeds are quoted for a path of this length. Real maps range from 60
@@ -47,42 +52,6 @@ MAX_STEP = 0.05
 
 # Phases of a run.
 BUILD, WAVE, LOST, WON = "BUILD", "WAVE", "LOST", "WON"
-
-
-def load_map(art: str) -> tuple[list[str], list[tuple[int, int]]]:
-    """Turn ASCII art into a padded grid plus the ordered list of path cells.
-
-    Returns (grid, path) with path[0] the entrance and path[-1] the base.
-    Creeps are positioned by how far along `path` they are, so this single
-    trace is the only pathfinding the game ever needs to do.
-    """
-    rows = art.strip("\n").split("\n")
-    width = max(len(r) for r in rows)
-    grid = [r.ljust(width, ".") for r in rows]
-
-    def find(ch: str) -> tuple[int, int]:
-        for y, row in enumerate(grid):
-            x = row.find(ch)
-            if x >= 0:
-                return y, x
-        raise ValueError(f"map has no {ch!r} marker")
-
-    start, end = find("S"), find("E")
-
-    # Greedy walk: from each cell, step to its one unvisited path neighbour.
-    path, seen, cur = [start], {start}, start
-    while cur != end:
-        y, x = cur
-        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
-            if (0 <= ny < len(grid) and 0 <= nx < width
-                    and grid[ny][nx] in PATH_CHARS and (ny, nx) not in seen):
-                cur = (ny, nx)
-                seen.add(cur)
-                path.append(cur)
-                break
-        else:
-            raise ValueError(f"path is broken or forks at {cur}")
-    return grid, path
 
 
 def dist2(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -195,11 +164,12 @@ class Effect:
 
 
 class Game:
-    def __init__(self, mode: Mode, map_name: str, art: str) -> None:
+    def __init__(self, mode: Mode, field_: MapDef) -> None:
         self.mode = mode
-        self.map_name = map_name
-        self.grid, self.path = load_map(art)
-        self.h, self.w = len(self.grid), len(self.grid[0])
+        self.map = field_
+        self.map_name = field_.name
+        self.grid, self.path = field_.grid, field_.path
+        self.h, self.w = field_.h, field_.w
 
         # See REFERENCE_PATH above.
         self.pace = mode.speed * (len(self.path) / REFERENCE_PATH)
@@ -252,19 +222,51 @@ class Game:
     def is_path(self, y: int, x: int) -> bool:
         return self.grid[y][x] in PATH_CHARS
 
+    def ground(self, y: int, x: int) -> Terrain:
+        return self.map.ground(y, x)
+
+    def buildable(self, y: int, x: int) -> bool:
+        """Ground a tower could stand on if nothing were already there.
+
+        The road is out because creeps walk it, and so is anything a gun
+        crew could not physically emplace on: open water, a bog that will
+        not take the weight, a wood too thick to cut a field of fire in, a
+        mountainside. It is the map, not the rules, that decides.
+        """
+        return self.map.buildable(y, x)
+
     def at(self, y: int, x: int) -> Building | None:
         return self.plots.get((y, x))
 
     def can_place(self, y: int, x: int, spec: BuildSpec) -> bool:
-        """Every cell of the footprint must be free grass inside the map."""
+        """Every cell of the footprint must be clear, buildable, and on the map."""
         h, w = spec.foot
         if y < 0 or x < 0 or y + h > self.h or x + w > self.w:
             return False
         for dy in range(h):
             for dx in range(w):
-                if self.is_path(y + dy, x + dx) or (y + dy, x + dx) in self.plots:
+                if not self.buildable(y + dy, x + dx) or (y + dy, x + dx) in self.plots:
                     return False
         return True
+
+    def high_ground(self, y: int, x: int, spec: BuildSpec) -> float:
+        """Extra reach a footprint anchored at (y, x) would get from the ground.
+
+        The whole emplacement has to be up there, not one corner of it — a
+        battery half on the ridge is a battery in the valley. Which is why
+        armies spend so much of their time walking uphill.
+        """
+        h, w = spec.foot
+        return min((self.ground(y + dy, x + dx).high
+                    for dy in range(h) for dx in range(w)
+                    if 0 <= y + dy < self.h and 0 <= x + dx < self.w),
+                   default=0.0)
+
+    def reach(self, b: Building) -> float:
+        """A weapon's range where it actually stands."""
+        if b.tier.range <= 0:
+            return b.tier.range
+        return b.tier.range + self.high_ground(b.y, b.x, b.spec)
 
     def site(self, y: int, x: int, spec: BuildSpec) -> tuple[int, int] | None:
         """Where a footprint would actually land if you built at (y, x).
@@ -274,7 +276,7 @@ class Game:
         ground the moment you stand at the bottom or right edge of a
         clearing. Instead the cursor only has to fall *somewhere inside* the
         footprint: try the top-left reading first, then slide the block up
-        and left until it sits on clear grass. Returns the anchor, or None
+        and left until it sits on open ground. Returns the anchor, or None
         when no arrangement covering (y, x) is clear.
         """
         h, w = spec.foot
@@ -411,8 +413,12 @@ class Game:
         spot = self.site(self.cy, self.cx, spec)
         if spot is None:
             h, w = spec.foot
-            self.message = (f"A {spec.name} needs {h}x{w} of clear grass here."
-                            if spec.cells > 1 else "No room there.")
+            here = self.ground(self.cy, self.cx)
+            if not self.is_path(self.cy, self.cx) and not here.build:
+                self.message = f"Nothing stands in {here.name}."
+            else:
+                self.message = (f"A {spec.name} needs {h}x{w} of open ground here."
+                                if spec.cells > 1 else "No room there.")
             return "deny"
         if self.gold < spec.cost:
             self.message = f"Not enough gold for a {spec.name} (${spec.cost})."
@@ -427,6 +433,9 @@ class Game:
         self._resurvey()
         if spec.role == "generator":
             self.message = f"Generator online. Grid at {self.supply} units."
+        elif self.high_ground(*spot, spec):
+            self.message = (f"{spec.name} on the high ground — "
+                            f"reach {self.reach(b):.1f}.")
         else:
             self.message = f"{spec.name} emplaced, drawing {b.tier.power}."
         return "build"
@@ -581,7 +590,7 @@ class Game:
         if not b.spec.shot or tier.damage <= 0 or now < b.ready_at:
             return
         origin = b.centre
-        reach = tier.range ** 2
+        reach = self.reach(b) ** 2
 
         # Classic "first" targeting: shoot whatever is nearest to the base.
         target, best = None, -1.0

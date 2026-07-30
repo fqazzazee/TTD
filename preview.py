@@ -12,27 +12,38 @@ back and print it as text. Dev tool for eyeballing layout without playing.
     python3 preview.py quote 80 24
     python3 preview.py elite 120 36    # a late wave: elite creeps and a Warlord
     python3 preview.py pause 120 36    # the pause menu over a frozen battle
+    python3 preview.py story 90 34     # the campaign menu
+    python3 preview.py maps 90 34      # the battlefield chooser
+    python3 preview.py brief 90 30     # a chapter briefing
+    python3 preview.py editor 110 30   # the map editor
+    python3 preview.py map:Midway 120 34    # any battlefield by name
 """
 import curses, fcntl, os, pty, random, struct, sys, tempfile, termios, time
 
 
 def child(scene, cols, rows, outfile):
+    import editor as ED
     import render
-    from content import MAPS, MODES, WAR_QUOTES, build_wave
+    import story
+    import terrain
+    from content import MODES, WAR_QUOTES, build_wave
     from game import WAVE, Game
+    from terrain import MAPS
     from theme import Theme
 
     def body(scr):
         curses.curs_set(0)
         theme = Theme()
         random.seed(4)
-        if scene in ("board", "compact", "level", "pause", "elite"):
+        if scene.startswith("map:") or scene in ("board", "compact", "level",
+                                                 "pause", "elite"):
             # Biggest map this window can hold, exactly as the game picks one.
-            wanted = MAPS[0] if scene == "compact" else MAPS[4]
-            g = Game(MODES[2] if scene == "level" else MODES[0], *wanted)
-            if not render.fits(rows, cols, g.h, g.w):
-                for name, art in MAPS:
-                    probe = Game(g.mode, name, art)
+            named = terrain.by_name(scene[4:]) if scene.startswith("map:") else None
+            wanted = named or (MAPS[0] if scene == "compact" else MAPS[6])
+            g = Game(MODES[2] if scene == "level" else MODES[0], wanted)
+            if named is None and not render.fits(rows, cols, g.h, g.w):
+                for m in MAPS:
+                    probe = Game(g.mode, m)
                     if render.fits(rows, cols, probe.h, probe.w):
                         g = probe
                         break
@@ -86,6 +97,25 @@ def child(scene, cols, rows, outfile):
                 render.pause_overlay(scr, theme, g, lay, [
                     "RESUME", "SOUND            on", "MUSIC            on",
                     "HOW TO PLAY", "ABANDON THE RUN", "QUIT TTD"], 0)
+        elif scene == "story":
+            scr.timeout(1)
+            render.story_screen(scr, theme, story.chapters(),
+                                story.Progress(os.path.join(
+                                    tempfile.gettempdir(), "ttd-story.json")))
+        elif scene == "maps":
+            scr.timeout(1)
+            render.map_screen(scr, theme, list(MAPS))
+        elif scene == "brief":
+            scr.timeout(1)
+            ch = story.chapters()[1]
+            render.brief_screen(scr, theme, f"{ch.order}.  {ch.title.upper()}",
+                                theme.ink("title", bold=True), ch.field,
+                                ch.map_name, ch.brief, "any key to take the field")
+        elif scene == "editor":
+            scr.timeout(1)
+            sheet = ED.Sheet.load(terrain.by_name("Hastings") or MAPS[0])
+            ED._draw(scr, theme, sheet, 5, 12, "T", False,
+                     "draw a road from S to E, then press V", 0, 0)
         elif scene == "title":
             scr.timeout(1)
             render.title_screen(scr, theme)

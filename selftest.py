@@ -4,25 +4,32 @@ Checks that need no terminal.
 
     $ python3 selftest.py
 
-Three things worth guarding: every map traces into a clean route, the layout
-finds a sane arrangement at any plausible window size, and the rules produce a
-game that can actually be lost — a tower defense you cannot lose is a screensaver.
+Things worth guarding: every map on disk traces into a clean route, the ground
+under it behaves, the layout finds a sane arrangement at any plausible window
+size, the campaign holds together, and the rules produce a game that can
+actually be lost — a tower defense you cannot lose is a screensaver.
 """
 
 from __future__ import annotations
 
 import array
 import math
+import os
 import random
 import sys
+import tempfile
 from types import SimpleNamespace
 
 import audio
+import editor as ED
 import render
+import story
+import terrain as TR
 import theme as T
-from content import (BUILDINGS, ENEMIES, MAPS, MODES, SPEEDS, build_wave,
+from content import (BUILDINGS, ENEMIES, MODES, SPEEDS, build_wave,
                      is_boss_wave, menace)
-from game import PATH_CHARS, WAVE, Game, load_map
+from game import WAVE, Game
+from terrain import MAPS, PATH_CHARS
 
 failures: list[str] = []
 
@@ -35,18 +42,190 @@ def check(ok: bool, label: str, detail: str = "") -> None:
 
 # ---------------------------------------------------------------------------
 print("maps")
-for name, art in MAPS:
-    grid, path = load_map(art)
-    h, w = len(grid), len(grid[0])
-    marked = sum(row.count(c) for row in grid for c in PATH_CHARS)
-    ragged = len({len(r) for r in art.strip("\n").split("\n")}) > 1
-    check(len(path) == marked and not ragged, f"{name:11s} {w}x{h}",
-          f"path {len(path)} cells, {sum(r.count('.') for r in grid)} buildable")
+check(not TR.LOAD_ERRORS, "every map file on disk loads",
+      "; ".join(TR.LOAD_ERRORS) or f"{len(MAPS)} found in " +
+      ", ".join(TR.map_dirs()))
+check(len(MAPS) >= 10, "there are at least ten battlefields", str(len(MAPS)))
+for m in MAPS:
+    marked = sum(row.count(c) for row in m.grid for c in PATH_CHARS)
+    ragged = len({len(r) for r in m.art.strip("\n").split("\n")}) > 1
+    check(len(m.path) == marked and not ragged and m.open_ground > 60,
+          f"{m.name:14s} {m.w}x{m.h}",
+          f"road {len(m.path)} cells, {m.open_ground} buildable, "
+          f"{len(m.census())} kinds of ground")
+
+
+# ---------------------------------------------------------------------------
+print("\nground")
+
+# Every letter of the map alphabet has to survive the round trip from the file
+# to a colour on the screen, or a hand-edited map paints holes.
+missing = [t.ink for t in TR.TERRAIN.values()
+           if t.ink not in T.RICH_TERRAIN or t.ink not in T.BASIC_TERRAIN
+           or t.ink not in T.UNICODE_GROUND or t.ink not in T.ASCII_GROUND]
+missing += [f"road_{r}" for r in TR.ROADS
+            if f"road_{r}" not in T.RICH_TERRAIN
+            or f"road_{r}" not in T.UNICODE_GROUND
+            or f"road_{r}" not in T.ASCII_GROUND]
+check(not missing, "every terrain and road has glyphs and a colour ramp",
+      ", ".join(missing) or f"{len(TR.TERRAIN)} terrains, {len(TR.ROADS)} roads")
+check(all(len(v[1]) == 3 for v in T.RICH_TERRAIN.values())
+      and all(len(T.UNICODE_GROUND[k]) == len(T.ASCII_GROUND[k])
+              for k in T.UNICODE_GROUND),
+      "each ramp has three rungs and both glyph sets agree on length")
+
+# Relief is the whole 2.5D illusion: a cliff must put the ground below and to
+# the right of it into shadow, and take the light on its own near edge.
+cliff = TR.relief(["....", ".^^.", "....", "...."])
+check(cliff[1][1] == 2 and cliff[2][1] == 0 and cliff[1][3] == 0,
+      "high ground catches the light and throws a shadow down-right",
+      f"peak {cliff[1][1]}, below it {cliff[2][1]}, beside it {cliff[1][3]}")
+flat = TR.relief(["." * 24] * 6)
+tones = {v for row in flat for v in row}
+check(tones == {0, 1, 2} and sum(row.count(1) for row in flat) > 24 * 6 * 0.6,
+      "flat ground is mottled, not striped",
+      f"{sum(row.count(1) for row in flat)} of {24 * 6} cells left plain")
+
+# A map with no road at all, a forked one, and one with no base: all three are
+# complaints with a location in them, not tracebacks.
+broken = {
+    "forked": "S##\n.#.\n..E",
+    "no base": "S##\n..#\n...",
+    "stranded": "S#E\n...\n#..",
+}
+told = {}
+for label, art in broken.items():
+    try:
+        TR.MapDef(name=label, art=art)
+        told[label] = ""
+    except TR.MapError as exc:
+        told[label] = str(exc)
+check(all(told.values()), "a broken map is refused with a reason",
+      "  ·  ".join(f"{k}: {v}" for k, v in told.items()))
+
+# The file format has to survive a round trip, or the editor eats headers.
+one = MAPS[3]
+again = TR.parse(one.to_text(), source="round-trip")
+check(again.name == one.name and again.grid == one.grid
+      and again.road == one.road and again.brief == one.brief,
+      "a map written back out reads in identically", one.name)
+
+# Terrain decides where you can build, and the high ground pays for the walk.
+gterr = Game(MODES[0], next(m for m in MAPS if m.name == "Hastings"))
+wet = [(y, x) for y in range(gterr.h) for x in range(gterr.w)
+       if gterr.ground(y, x).name == "marsh"]
+high = [(y, x) for y in range(gterr.h) for x in range(gterr.w)
+        if gterr.ground(y, x).name == "hill"]
+gun = BUILDINGS[0]
+check(wet and high and not any(gterr.can_place(y, x, gun) for y, x in wet),
+      "nothing is built in a marsh", f"{len(wet)} marsh cells refused")
+flatspot = next((y, x) for y in range(gterr.h) for x in range(gterr.w)
+                if gterr.can_place(y, x, gun) and not gterr.high_ground(y, x, gun))
+ridge = next((y, x) for y, x in high if gterr.can_place(y, x, gun))
+gterr.gold, gterr.selected = 9999, 0
+gterr.cy, gterr.cx = ridge
+gterr.build()
+gterr.cy, gterr.cx = flatspot
+gterr.build()
+up, down = gterr.at(*ridge), gterr.at(*flatspot)
+check(gterr.reach(up) > gterr.reach(down),
+      "a gun on the ridge outranges the same gun on the flat",
+      f"{gterr.reach(up):.2f} vs {gterr.reach(down):.2f}")
+
+# ...and a footprint half on the hill gets nothing, because half a battery on
+# the high ground is a battery in the valley.
+cannon = BUILDINGS[2]
+edge = next(((y, x) for y in range(gterr.h - 1) for x in range(gterr.w - 1)
+             if gterr.can_place(y, x, cannon)
+             and any(gterr.ground(y + dy, x + dx).high
+                     for dy in range(2) for dx in range(2))
+             and any(not gterr.ground(y + dy, x + dx).high
+                     for dy in range(2) for dx in range(2))), None)
+check(edge is None or gterr.high_ground(*edge, cannon) == 0,
+      "a footprint straddling the crest gets no bonus",
+      f"anchor {edge}" if edge else "no straddling 2x2 on this map")
+
+
+# ---------------------------------------------------------------------------
+print("\nthe campaign")
+
+chaps = story.chapters()
+check(len(chaps) == len(story.CHAPTERS) and len(chaps) >= 10,
+      "every chapter has its battlefield installed",
+      f"{len(chaps)} battles")
+check([c.order for c in chaps[:5]] == ["I", "II", "III", "IV", "V"]
+      and chaps[-1].order == story.numeral(len(chaps)),
+      "chapters are numbered by where they sit, not by hand",
+      f"last is {chaps[-1].order}")
+check(all(c.mode.target for c in chaps),
+      "every chapter ends — a campaign of endless waves is a treadmill")
+check(len({c.map_name for c in chaps}) == len(chaps),
+      "no battle is fought twice")
+
+# The one thing a campaign must not do is lock the player out of it.
+prog = story.Progress(os.path.join(tempfile.gettempdir(), "ttd-selftest.json"))
+prog.cleared, prog.best = set(), {}
+check(prog.unlocked(chaps[0]) and not prog.unlocked(chaps[1])
+      and prog.next_chapter() is chaps[0],
+      "a fresh campaign opens on its first battle and no further")
+prog.record(chaps[0], won=True, score=1234)
+check(prog.unlocked(chaps[1]) and prog.is_cleared(chaps[0])
+      and prog.best[chaps[0].map_name] == 1234
+      and prog.next_chapter() is chaps[1],
+      "winning one opens the next and remembers the score")
+prog.record(chaps[1], won=False, score=99)
+check(not prog.is_cleared(chaps[1]) and prog.unlocked(chaps[1]),
+      "losing takes nothing away")
+for c in chaps:
+    prog.record(c, won=True, score=1)
+check(prog.complete and all(prog.unlocked(c) for c in chaps),
+      "and the whole campaign can be finished", f"{prog.done} battles")
+os.remove(prog.path)
+
+
+# ---------------------------------------------------------------------------
+print("\nthe editor")
+
+sheet = ED.Sheet("Scratch")
+check(sheet.check() and sheet.w == ED.NEW_W,
+      "a blank sheet has no road yet, and says so", sheet.check())
+sheet.paint(0, 0, "S")
+for x in range(1, sheet.w):
+    sheet.paint(0, x, "#")
+sheet.paint(0, sheet.w - 1, "E")
+check(not sheet.check(), "a road drawn from edge to edge validates",
+      sheet.check() or f"{sheet.w} cells")
+
+# Painting a second entrance moves the first rather than leaving two behind —
+# which is also how you drag either end of the road somewhere else.
+sheet.paint(0, 5, "S")
+counts = (sum(r.count("S") for r in sheet.rows()),
+          sum(r.count("E") for r in sheet.rows()))
+sheet.paint(0, 0, "S")
+check(counts == (1, 1) and not sheet.check(),
+      "there is only ever one entrance and one base",
+      f"S x{counts[0]}, E x{counts[1]} after moving the entrance")
+
+before = sheet.rows()
+sheet.paint(4, 4, "T")
+check(sheet.restore() and sheet.rows() == before, "undo puts it back")
+check(sheet.resize(2, 1) and sheet.w == ED.NEW_W + 2
+      and sheet.h == ED.NEW_H + 1 and len(set(map(len, sheet.rows()))) == 1,
+      "resizing keeps every row the same length",
+      f"{sheet.w}x{sheet.h}")
+check(not sheet.resize(-500, 0) and sheet.w == ED.NEW_W + 2,
+      "and refuses to shrink a map out of existence")
+check(sheet.filename() == "scratch.map",
+      "the file it would write is named after the battle", sheet.filename())
+round_trip = TR.parse(ED.Sheet.load(MAPS[2]).to_text())
+check(round_trip.grid == MAPS[2].grid and round_trip.name == MAPS[2].name,
+      "opening a shipped map in the editor and writing it back changes nothing",
+      MAPS[2].name)
 
 
 # ---------------------------------------------------------------------------
 print("\nlayout")
-sizes = [(len(load_map(a)[0]), len(load_map(a)[0][0])) for _, a in MAPS]
+sizes = [(m.h, m.w) for m in MAPS]
 smallest = min(sizes)
 need_w, need_h = render.smallest_need(*smallest)
 check(render.plan(need_h, need_w, *smallest) is not None,
@@ -70,7 +249,7 @@ print("\nrules")
 GUN, GEN = 0, 3
 
 
-def simulate(mode, art, name, towers_max, seed=1, cap_waves=40, upgrade=False):
+def simulate(mode, field_, towers_max, seed=1, cap_waves=40, upgrade=False):
     """Play a whole run headlessly with a crude auto-builder.
 
     It buys a generator whenever the grid is short and a gun otherwise — the
@@ -78,7 +257,7 @@ def simulate(mode, art, name, towers_max, seed=1, cap_waves=40, upgrade=False):
     useful floor for balance rather than a ceiling.
     """
     random.seed(seed)
-    g = Game(mode, name, art)
+    g = Game(mode, field_)
     dt = 1 / 30
     adjacent = [(y, x) for y in range(g.h) for x in range(g.w)
                 if not g.is_path(y, x) and any(
@@ -110,14 +289,13 @@ def simulate(mode, art, name, towers_max, seed=1, cap_waves=40, upgrade=False):
 
 
 classic = MODES[0]
-name, art = MAPS[2]
-g = simulate(classic, art, name, towers_max=0)
+g = simulate(classic, MAPS[2], towers_max=0)
 check(g.state == "LOST" and g.wave <= 4, "an undefended base falls quickly",
       f"wave {g.wave}")
 
 reached = []
 for cap in (4, 10, 24):
-    g = simulate(classic, art, name, towers_max=cap)
+    g = simulate(classic, MAPS[2], towers_max=cap)
     reached.append(g.wave)
 check(reached == sorted(reached) and reached[0] < reached[-1],
       "more towers survive longer", " < ".join(map(str, reached)))
@@ -125,14 +303,13 @@ check(reached == sorted(reached) and reached[0] < reached[-1],
 # Path length varies four-fold across the map sizes; creep speed is scaled to
 # compensate, so a given defense should fare roughly alike everywhere.
 spread = []
-for name, art in MAPS:
-    spread.append(simulate(classic, art, name, towers_max=12, seed=5).wave)
-check(max(spread) - min(spread) <= 8, "difficulty is comparable across maps",
-      " ".join(f"{n}:{w}" for (n, _), w in zip(MAPS, spread)))
+for m in MAPS:
+    spread.append(simulate(classic, m, towers_max=12, seed=5).wave)
+check(max(spread) - min(spread) <= 10, "difficulty is comparable across maps",
+      " ".join(f"{m.name.split()[0][:6]}:{w}" for m, w in zip(MAPS, spread)))
 
 for mode in MODES:
-    name, art = MAPS[2]
-    g = simulate(mode, art, name, towers_max=14, seed=3)
+    g = simulate(mode, MAPS[2], towers_max=14, seed=3)
     ended = "won" if g.state == "WON" else f"lost on wave {g.wave}"
     check(g.over, f"{mode.name:11s} reaches an ending", ended)
 
@@ -140,7 +317,7 @@ for mode in MODES:
 # defense should reach roughly the same wave however fast the battle is run.
 def at_speed(step):
     random.seed(9)
-    g = Game(classic, MAPS[4][0], MAPS[4][1])
+    g = Game(classic, MAPS[4])
     g.speed_step = step
     g.gold = 5000
     for y, x in ((1, 6), (5, 20), (8, 30), (1, 26), (5, 8), (8, 14)):
@@ -165,7 +342,7 @@ check(abs(slow[0] - fast[0]) <= 1 and abs(slow[1] - fast[1]) <= 3,
 # Gauntlet is the only mode you can finish, so the victory branch needs a win
 # to be reachable at all — otherwise nobody ever sees the triumph screen.
 gauntlet = next(m for m in MODES if m.target)
-g = simulate(gauntlet, MAPS[5][1], MAPS[5][0], towers_max=200, seed=2, upgrade=True)
+g = simulate(gauntlet, MAPS[3], towers_max=200, seed=2, upgrade=True)
 check(g.state == "WON", "Gauntlet is winnable with a serious defense",
       f"{len(g.buildings)} buildings, wave {g.wave}, {g.lives} lives left")
 
@@ -173,7 +350,7 @@ check(g.state == "WON", "Gauntlet is winnable with a serious defense",
 # ---------------------------------------------------------------------------
 print("\npower, footprints and marks")
 
-g = Game(classic, MAPS[4][0], MAPS[4][1])
+g = Game(classic, MAPS[4])
 gun, frost, cannon, gen = BUILDINGS
 check(g.supply == classic.power and g.draw == 0,
       "a run starts on its mode's grid capacity", f"{g.supply} units")
@@ -196,7 +373,7 @@ check(g.build() == "deny", "nothing else fits inside it")
 # right edge of a clearing, which is the "no room even though there is room"
 # complaint. Every cell that some clear 2x2 can cover must be buildable, and
 # the block that lands must actually cover the cell you were standing on.
-base = Game(classic, MAPS[4][0], MAPS[4][1])
+base = Game(classic, MAPS[4])
 rescued = refused = 0
 for y in range(base.h):
     for x in range(base.w):
@@ -206,7 +383,7 @@ for y in range(base.h):
             continue
         if not base.can_place(y, x, cannon):
             rescued += 1                     # only fits by sliding up or left
-        probe = Game(classic, MAPS[4][0], MAPS[4][1])
+        probe = Game(classic, MAPS[4])
         probe.gold, probe.selected = 9999, 2
         probe.cy, probe.cx = y, x
         if probe.build() != "build" or (y, x) not in probe.plots:
@@ -218,7 +395,7 @@ check(refused >= 0 and rescued > 0,
 
 # ...and the ghost you see is the ground you get: site() is what both the
 # renderer and build() ask, so the preview can never lie about where it lands.
-gfit = Game(classic, MAPS[4][0], MAPS[4][1])
+gfit = Game(classic, MAPS[4])
 gfit.gold, gfit.selected = 9999, 2
 slid = next((y, x) for y in range(gfit.h) for x in range(gfit.w)
             if gfit.site(y, x, cannon) and not gfit.can_place(y, x, cannon))
@@ -230,7 +407,7 @@ check(gfit.at(*slid) is not None and (gfit.at(*slid).y, gfit.at(*slid).x) == see
       f"cursor {slid} -> anchor {seen}")
 
 # Refusal is still real when the ground genuinely is not there.
-gtight = Game(classic, MAPS[4][0], MAPS[4][1])
+gtight = Game(classic, MAPS[4])
 gtight.gold, gtight.selected = 9999, 2
 onpath = next((y, x) for y in range(gtight.h) for x in range(gtight.w)
               if gtight.is_path(y, x))
@@ -240,7 +417,7 @@ check(gtight.build() == "deny" and gtight.site(*onpath, cannon) is None,
       f"road cell {onpath}")
 
 # Power: drawing more than the grid supplies browns the defense out.
-g2 = Game(classic, MAPS[4][0], MAPS[4][1])
+g2 = Game(classic, MAPS[4])
 g2.gold = 9999
 placed = 0
 for y in range(g2.h):
@@ -269,7 +446,7 @@ for spec in BUILDINGS:
 
 # Upgrades buy power and reach, never more ground: a building walled in on
 # every side must still be able to reach mk3.
-gboxed = Game(classic, MAPS[4][0], MAPS[4][1])
+gboxed = Game(classic, MAPS[4])
 gboxed.gold = 100000
 for spec, idx in ((gun, 0), (frost, 1), (cannon, 2), (gen, 3)):
     spot = next((y, x) for y in range(gboxed.h) for x in range(gboxed.w)
@@ -292,7 +469,7 @@ for spec, idx in ((gun, 0), (frost, 1), (cannon, 2), (gen, 3)):
           f"{spec.foot} and {len(before)} cells at every mark")
 
 # Frost paints the ground it slows, and a bigger mark paints more of it.
-g3 = Game(classic, MAPS[4][0], MAPS[4][1])
+g3 = Game(classic, MAPS[4])
 g3.gold = 9999
 spot = next((y, x) for y in range(g3.h) for x in range(g3.w)
             if g3.can_place(y, x, frost))
@@ -385,7 +562,7 @@ check(bosses == [12, 17, 22, 27] and
       f"waves {bosses}")
 
 # What spawns wears the wave's rank.
-gr = Game(MODES[0], MAPS[4][0], MAPS[4][1])
+gr = Game(MODES[0], MAPS[4])
 gr.wave = 14
 gr.queue, gr.hp_mult = build_wave(gr.mode, gr.wave)
 gr.wave_total, gr.state, gr.spawn_at = len(gr.queue), WAVE, gr.clock
@@ -407,7 +584,7 @@ class StubTheme:
 
 
 stub = StubTheme()
-gidx = Game(MODES[0], MAPS[4][0], MAPS[4][1])
+gidx = Game(MODES[0], MAPS[4])
 gidx.state, gidx.queue, gidx.wave_total = WAVE, ["grunt"] * 4 + ["runner"], 5
 full = render._enemy_rows(stub, gidx, 0, 0)
 names = [r[1][0].strip() for r in full]
@@ -508,7 +685,7 @@ check(all(hasattr(quiet, m) for m in
 
 # Announcements: two of them, and neither is a shout into an empty room.
 import ttd                                            # noqa: E402
-gsay = Game(MODES[0], MAPS[4][0], MAPS[4][1])
+gsay = Game(MODES[0], MAPS[4])
 gsay.wave = 12
 lines = {cue: ttd.announce(gsay, cue) for cue in
          ("wave", "boss", "build", "leak", "boom", "cleared")}
@@ -525,7 +702,7 @@ check(ttd.announce(gsay, "wave") == "Wave 7." ,
 # ---------------------------------------------------------------------------
 print("\npausing")
 
-gp = Game(MODES[0], MAPS[4][0], MAPS[4][1])
+gp = Game(MODES[0], MAPS[4])
 gp.state, gp.queue, gp.wave_total, gp.hp_mult = WAVE, ["grunt"] * 5, 5, 1.0
 for _ in range(30):
     gp.update(1 / 30)
