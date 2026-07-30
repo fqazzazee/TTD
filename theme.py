@@ -8,12 +8,21 @@ the terminal any questions.
 
 Three tiers, each degrading gracefully into the next:
 
-    Unicode + 256 colours   the intended look: textured terrain, box panels
+    Unicode + 256 colours   the intended look: lit terrain, box panels
     Unicode + 8 colours     same shapes, blunter palette
     ASCII + no colour       plain letters, still perfectly playable
 
 Set TTD_ASCII=1 to force the ASCII tier (useful if your font renders the
 geometric shapes double-width and skews the board).
+
+Terrain gets three shades rather than one colour, because that is what makes
+a flat grid of characters read as a landscape. Every kind of ground carries a
+ramp — the face in shadow, the face lying flat, the face catching the light —
+and `terrain.relief` decides which one each cell wears from the height of its
+neighbours. The light comes from the top left and never moves, so a ridge
+looks like a ridge and a shoreline looks like an edge instead of a colour
+change. In the eight-colour tier the ramp collapses into dim / normal / bold,
+which says less but says the same thing.
 """
 
 from __future__ import annotations
@@ -32,8 +41,6 @@ import sys
 # the ground looks scattered but never flickers between frames.
 
 UNICODE_GLYPHS = {
-    "grass":  (" ", " ", " ", "'", " ", " ", ",", " ", " ", "`", " ", "„"),
-    "path":   ("░", "░", "░", "░", "░", "▒"),
     "start":  "»",
     "base":   "⌂",
     # Chess pieces for the three weapons: pawn, bishop, rook reads as the
@@ -66,11 +73,15 @@ UNICODE_GLYPHS = {
     "frame":  "╔╗╚╝═║",     # heavier frame, used around the battlefield
     "bar":    ("█", "░"),
     "rule":   "─",
+    "tick":   "✓",
+    "star":   "★",
+    "brush":  "▚",
+    # The lit top edge of anything you build. Empty in the plain tier: a row
+    # of dashes over every tower reads as clutter, not as a raised block.
+    "lip":    "▔",
 }
 
 ASCII_GLYPHS = {
-    "grass":  (" ", " ", " ", "'", " ", " ", ",", " ", " ", "`", " ", "*"),
-    "path":   (".", ".", ".", ".", ".", ":"),
     "start":  ">",
     "base":   "@",
     "gun":    "P",           # pawn
@@ -101,6 +112,118 @@ ASCII_GLYPHS = {
     "frame":  "++++=|",
     "bar":    ("#", "-"),
     "rule":   "-",
+    "tick":   "+",
+    "star":   "*",
+    "brush":  "#",
+    "lip":    "",
+}
+
+
+# ---------------------------------------------------------------------------
+# Ground
+# ---------------------------------------------------------------------------
+#
+# One texture per kind of ground, picked per cell by hashing its coordinates.
+# Open country is mostly blank on purpose: the colour ramp is doing the work,
+# and a plain covered in punctuation reads as noise rather than grass. Only
+# the things that genuinely stand up on the board — trees, peaks, rubble —
+# get a glyph in every cell.
+
+UNICODE_GROUND = {
+    "grass":    (" ", " ", " ", "'", " ", " ", ",", " ", " ", "`", " ", "„"),
+    "hill":     (" ", " ", "'", " ", " ", "ˆ", " ", " ", "`", " ", " ", "ʼ"),
+    "scrub":    (" ", " ", "„", " ", "ʻ", " ", " ", "ˏ", " ", ",", " ", " "),
+    "sand":     (" ", " ", " ", " ", "˙", " ", " ", "·", " ", " ", "˜", " "),
+    "snow":     (" ", " ", " ", "·", " ", " ", "˙", " ", " ", "'", " ", " "),
+    "rubble":   ("·", " ", "˙", ",", " ", "▫", " ", "·", " ", "˛"),
+    "forest":   ("♠", "♣", "♠", "♣", "♠", "♠", "♣", "♠"),
+    "mountain": ("▲", "▲", "◭", "▲", "△", "▲"),
+    "water":    ("≈", "~", " ", " ", "≈", " ", "~", " "),
+    "marsh":    ("≋", "~", " ", "ʻ", "≋", " ", "~", ","),
+    "ruins":    ("▓", "▒", "█", "▚", "▒", "▓", "▞", "▒"),
+
+    "road_dust":  ("░", "░", "░", "░", "░", "▒"),
+    "road_mud":   ("░", "▒", "░", "░", "▓", "░"),
+    "road_stone": ("░", "░", "▒", "░", "▫", "░"),
+    "road_snow":  (" ", " ", "░", " ", " ", "·"),
+    "road_sand":  ("░", "░", " ", "░", "▒", " "),
+    "road_water": ("≈", "~", " ", "≈", "~", " "),
+    "road_grass": ("░", " ", "░", "▒", " ", "░"),
+}
+
+ASCII_GROUND = {
+    "grass":    (" ", " ", " ", "'", " ", " ", ",", " ", " ", "`", " ", "*"),
+    "hill":     (" ", " ", "'", " ", " ", "^", " ", " ", "`", " ", " ", "'"),
+    "scrub":    (" ", " ", ",", " ", "'", " ", " ", ",", " ", " ", " ", " "),
+    "sand":     (" ", " ", " ", " ", ".", " ", " ", ".", " ", " ", "-", " "),
+    "snow":     (" ", " ", " ", "'", " ", " ", ".", " ", " ", "'", " ", " "),
+    "rubble":   (".", " ", ".", ",", " ", "o", " ", ".", " ", ","),
+    "forest":   ("&", "&", "Y", "&", "%", "&", "Y", "&"),
+    "mountain": ("A", "A", "^", "A", "M", "A"),
+    "water":    ("~", "~", " ", " ", "~", " ", "-", " "),
+    "marsh":    ("~", "-", " ", "'", "~", " ", ",", " "),
+    "ruins":    ("#", "=", "H", "#", "=", "#", "=", "H"),
+
+    "road_dust":  (".", ".", ".", ".", ".", ":"),
+    "road_mud":   (".", ":", ".", ".", ":", "."),
+    "road_stone": (".", ".", ":", ".", "-", "."),
+    "road_snow":  (" ", " ", ".", " ", " ", "."),
+    "road_sand":  (".", ".", " ", ".", ":", " "),
+    "road_water": ("~", "-", " ", "~", "-", " "),
+    "road_grass": (".", " ", ".", ":", " ", "."),
+}
+
+# Ground that never holds still. The phase is folded into the hash, so a sea
+# shifts about without any cell ever needing to remember its last frame.
+RESTLESS = {"water", "marsh", "road_water"}
+
+# Each ramp is (foreground, (in shadow, flat, in the light)). The three
+# backgrounds are the whole trick: they are what turn a grid of characters
+# into ground with a shape.
+RICH_TERRAIN = {
+    "grass":    (108, (22, 28, 34)),
+    "hill":     (149, (28, 34, 70)),
+    "scrub":    (144, (58, 64, 100)),
+    "sand":     (229, (137, 179, 223)),
+    "snow":     (255, (103, 146, 189)),
+    "rubble":   (247, (235, 238, 242)),
+    "forest":   (35,  (233, 22, 28)),
+    "mountain": (253, (237, 241, 246)),
+    "water":    (39,  (17, 18, 24)),
+    "marsh":    (107, (233, 22, 58)),
+    "ruins":    (250, (234, 237, 241)),
+
+    "road_dust":  (180, (58, 94, 137)),
+    "road_mud":   (137, (233, 235, 58)),
+    "road_stone": (251, (236, 239, 244)),
+    "road_snow":  (189, (60, 103, 146)),
+    "road_sand":  (215, (94, 130, 172)),
+    "road_water": (51,  (18, 24, 31)),
+    "road_grass": (186, (58, 64, 70)),
+}
+
+# Eight colours cannot ramp, so the shade rides on dim / plain / bold and the
+# only thing left to say is what kind of ground it is.
+BASIC_TERRAIN = {
+    "grass":    curses.COLOR_GREEN,
+    "hill":     curses.COLOR_GREEN,
+    "scrub":    curses.COLOR_YELLOW,
+    "sand":     curses.COLOR_YELLOW,
+    "snow":     curses.COLOR_WHITE,
+    "rubble":   curses.COLOR_WHITE,
+    "forest":   curses.COLOR_GREEN,
+    "mountain": curses.COLOR_WHITE,
+    "water":    curses.COLOR_BLUE,
+    "marsh":    curses.COLOR_CYAN,
+    "ruins":    curses.COLOR_WHITE,
+
+    "road_dust":  curses.COLOR_YELLOW,
+    "road_mud":   curses.COLOR_YELLOW,
+    "road_stone": curses.COLOR_WHITE,
+    "road_snow":  curses.COLOR_WHITE,
+    "road_sand":  curses.COLOR_YELLOW,
+    "road_water": curses.COLOR_BLUE,
+    "road_grass": curses.COLOR_GREEN,
 }
 
 
@@ -143,8 +266,6 @@ STRIDE = 0.5
 # a palette is a one-line change here.
 
 RICH = {                    # xterm-256 indices
-    "grass_bg": 22,  "grass_fg": 65,
-    "path_bg": 94,   "path_fg": 180,
     "start_bg": 28,  "start_fg": 232,
     "base_bg": 124,  "base_fg": 231,
     "gun": 51, "frost": 87, "cannon": 208, "generator": 227,
@@ -160,8 +281,6 @@ RICH = {                    # xterm-256 indices
 }
 
 BASIC = {                   # the guaranteed eight, on the default background
-    "grass_bg": -1,  "grass_fg": curses.COLOR_GREEN,
-    "path_bg": -1,   "path_fg": curses.COLOR_YELLOW,
     "start_bg": -1,  "start_fg": curses.COLOR_GREEN,
     "base_bg": -1,   "base_fg": curses.COLOR_RED,
     "gun": curses.COLOR_CYAN, "frost": curses.COLOR_CYAN,
@@ -205,7 +324,11 @@ class Theme:
         self.unicode = unicode_ok()
         self.g = UNICODE_GLYPHS if self.unicode else ASCII_GLYPHS
         self.m = UNICODE_MENACE if self.unicode else ASCII_MENACE
+        self.ground = UNICODE_GROUND if self.unicode else ASCII_GROUND
         self.color = curses.has_colors()
+        self.rich = False
+        self.terra: dict = {}
+        self.default_bg = True
         self._pairs: dict[tuple[int, int], int] = {}
         self._next = 1
 
@@ -214,12 +337,13 @@ class Theme:
             return
 
         curses.start_color()
-        self.default_bg = True
         try:
             curses.use_default_colors()
         except curses.error:
             self.default_bg = False
-        self.c = dict(RICH if curses.COLORS >= 256 else BASIC)
+        self.rich = curses.COLORS >= 256
+        self.c = dict(RICH if self.rich else BASIC)
+        self.terra = RICH_TERRAIN if self.rich else BASIC_TERRAIN
         if not self.default_bg:
             self.c = {k: (curses.COLOR_BLACK if v == -1 else v) for k, v in self.c.items()}
 
@@ -239,10 +363,74 @@ class Theme:
             attr |= curses.A_DIM
         return attr
 
+    # -- terrain ------------------------------------------------------------
+
+    def _ramp(self, ink: str, shade: int) -> tuple[int, int]:
+        """(foreground, background) for a kind of ground at a given shade."""
+        entry = self.terra.get(ink)
+        if entry is None:
+            return -1, (-1 if self.default_bg else curses.COLOR_BLACK)
+        if not self.rich:
+            return entry, (-1 if self.default_bg else curses.COLOR_BLACK)
+        fg, bgs = entry
+        return fg, bgs[max(0, min(2, shade))]
+
+    def land(self, ink: str, shade: int = 1) -> int:
+        """Attribute for a cell of ground.
+
+        Rich terminals get the shade in the background colour; everything
+        else gets it in dim / plain / bold, which is coarse but still reads
+        as light and shadow once the whole board is drawn that way.
+        """
+        attr = 0
+        if self.color:
+            fg, bg = self._ramp(ink, shade)
+            attr = self._pair(fg, bg)
+        if shade == 0:
+            attr |= curses.A_DIM
+        elif shade == 2 and not self.rich:
+            attr |= curses.A_BOLD
+        return attr
+
+    def over(self, fg: str, ink: str, shade: int = 1,
+             bold: bool = False, dim: bool = False) -> int:
+        """A named colour painted *onto* ground — creeps, shots, blasts.
+
+        Overlays always take the flat shade of whatever they stand on. The
+        alternative is a colour pair for every combination of every thing
+        with every shade of every terrain, which a modest terminal will run
+        out of long before the player notices the difference.
+        """
+        attr = 0
+        if self.color:
+            _, bg = self._ramp(ink, shade)
+            attr = self._pair(self.c.get(fg, -1), bg)
+        if bold:
+            attr |= curses.A_BOLD
+        if dim:
+            attr |= curses.A_DIM
+        return attr
+
+    def tile(self, ink: str, y: int, x: int, phase: int = 0) -> str:
+        """The texture on one cell of ground. Restless ground uses `phase`."""
+        tiles = self.ground.get(ink)
+        if not tiles:
+            return " "
+        return tiles[self._hash(y, x, phase if ink in RESTLESS else 0)
+                     % len(tiles)]
+
+    @staticmethod
+    def _hash(y: int, x: int, salt: int = 0) -> int:
+        h = (y * 0x9E3779B1) ^ (x * 0x85EBCA77) ^ (salt * 0x27D4EB2F)
+        h &= 0xFFFFFFFF
+        h ^= h >> 13
+        h = (h * 0xC2B2AE35) & 0xFFFFFFFF
+        return h ^ (h >> 16)
+
     def _pair(self, fg: int, bg: int) -> int:
         key = (fg, bg)
         if key not in self._pairs:
-            if self._next >= min(curses.COLOR_PAIRS, 250):
+            if self._next >= min(curses.COLOR_PAIRS, 2048):
                 return 0                       # out of pairs: fall back to plain
             try:
                 curses.init_pair(self._next, fg, bg)
@@ -253,20 +441,6 @@ class Theme:
         return self._pairs[key]
 
     # -- glyphs -------------------------------------------------------------
-
-    def texture(self, key: str, y: int, x: int) -> str:
-        """Pick a stable texture tile for a cell from its coordinates.
-
-        The bit-mixing matters: a plain multiply-and-xor leaves the low bits
-        marching in step with x, and the ground comes out visibly tiled.
-        """
-        h = (y * 0x9E3779B1) ^ (x * 0x85EBCA77)
-        h &= 0xFFFFFFFF
-        h ^= h >> 13
-        h = (h * 0xC2B2AE35) & 0xFFFFFFFF
-        h ^= h >> 16
-        tiles = self.g[key]
-        return tiles[h % len(tiles)]
 
     def creep(self, key: str, rank: int = 0, walked: float = 0.0) -> str:
         """A creep's face at the given rank, mid-stride.

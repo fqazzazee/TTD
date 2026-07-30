@@ -11,7 +11,9 @@ placed on the grass beside it. Everything that gets through costs you lives.
 This file is the front door: it owns the terminal, moves between screens, and
 runs the frame loop. The interesting parts live next door —
 
-    content.py   balance numbers, game modes, maps, quotes
+    content.py   balance numbers, game modes, quotes
+    terrain.py   the map format, the ground, and every battlefield on disk
+    maps/*.map   the battlefields themselves, in plain text
     game.py      the rules, with no idea a terminal exists
     render.py    layout and drawing, with no idea of the rules
     theme.py     what this particular terminal can draw, and in what colours
@@ -20,7 +22,7 @@ runs the frame loop. The interesting parts live next door —
 
 Set TTD_ASCII=1 to force plain ASCII if the glyphs render badly in your font,
 TTD_SILENT=1 to keep it quiet, and TTD_NOMUSIC=1 for sound effects without
-the chiptune.
+the chiptune. TTD_MAPS points the map loader somewhere else entirely.
 """
 
 from __future__ import annotations
@@ -33,9 +35,10 @@ import time
 import audio
 import render
 import scores
-from content import (BUILDINGS, DEFEAT_QUOTES, MAPS, MODES, VICTORY_QUOTES,
+import terrain
+from content import (BUILDINGS, DEFEAT_QUOTES, MODES, VICTORY_QUOTES,
                      WAR_QUOTES)
-from game import BUILD, WON, Game, load_map
+from game import BUILD, WON, Game
 from theme import Theme
 
 FRAME_MS = 33                      # getch timeout, which also paces the game
@@ -226,26 +229,23 @@ def _hold(scr, theme: Theme, g: Game, seconds: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def pick_map(rows: int, cols: int) -> tuple[str, str] | None:
-    """A random map among those this terminal can display — the biggest class
-    that fits, so a roomy window gets a proper battlefield."""
-    playable = []
-    for name, art in MAPS:
-        grid, _ = load_map(art)
-        if render.fits(rows, cols, len(grid), len(grid[0])):
-            playable.append(((len(grid), len(grid[0])), (name, art)))
+def pick_map(rows: int, cols: int):
+    """A random battlefield among those this terminal can display — the
+    biggest that fits, so a roomy window gets a proper battle."""
+    playable = [m for m in terrain.MAPS if render.fits(rows, cols, m.h, m.w)]
     if not playable:
         return None
-    biggest = max(size for size, _ in playable)
-    return random.choice([m for size, m in playable if size == biggest])
+    biggest = max((m.h, m.w) for m in playable)
+    return random.choice([m for m in playable if (m.h, m.w) == biggest])
 
 
-def wait_for_room(scr, theme: Theme) -> tuple[str, str] | None:
-    """Nag until the window is big enough for the smallest map, or the player quits."""
+def wait_for_room(scr, theme: Theme):
+    """Nag until the window can hold a battlefield, or the player quits."""
     scr.timeout(200)
-    sizes = [(len(grid), len(grid[0])) for grid in
-             (load_map(art)[0] for _, art in MAPS)]
-    need = render.smallest_need(*min(sizes))
+    if terrain.MAPS:
+        need = render.smallest_need(*min((m.h, m.w) for m in terrain.MAPS))
+    else:
+        need = (80, 24)
     while True:
         rows, cols = scr.getmaxyx()
         chosen = pick_map(rows, cols)
@@ -263,12 +263,15 @@ def wait_for_room(scr, theme: Theme) -> tuple[str, str] | None:
 
 
 def run_campaign(scr, theme: Theme, mode, sound, board) -> str:
-    """Play `mode` until the player stops. Returns 'menu' or 'quit'."""
+    """Play `mode` until the player stops. Returns 'menu' or 'quit'.
+
+    Every run draws a fresh map, so the same rules are fought over different
+    ground each time.
+    """
     while True:
         chosen = wait_for_room(scr, theme)
         if chosen is None:
             return "quit"
-        name, art = chosen
 
         best = board.best(mode.name)
         sound.music("menu")
@@ -277,7 +280,8 @@ def run_campaign(scr, theme: Theme, mode, sound, board) -> str:
             header="BEFORE THE BATTLE",
             header_attr=theme.ink("title", bold=True),
             quote=random.choice(WAR_QUOTES),
-            subtitle=f"{mode.name}  ·  {name}"
+            subtitle=f"{mode.name}  ·  {chosen.name}"
+                     + (f"  ·  {chosen.when}" if chosen.when else "")
                      + (f"  ·  best {best:,}" if best else ""),
             footer="any key to take the field   ·   Q to withdraw",
             sound=sound,
@@ -285,7 +289,7 @@ def run_campaign(scr, theme: Theme, mode, sound, board) -> str:
         if key in (ord("q"), ord("Q")):
             return "menu"
 
-        g = Game(mode, name, art)
+        g = Game(mode, chosen)
         outcome = play(scr, theme, g, sound)
         if outcome in ("menu", "quit"):
             return outcome

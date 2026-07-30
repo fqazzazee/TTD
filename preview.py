@@ -12,27 +12,32 @@ back and print it as text. Dev tool for eyeballing layout without playing.
     python3 preview.py quote 80 24
     python3 preview.py elite 120 36    # a late wave: elite creeps and a Warlord
     python3 preview.py pause 120 36    # the pause menu over a frozen battle
+    python3 preview.py map:Midway 120 34    # any battlefield by name
 """
 import curses, fcntl, os, pty, random, struct, sys, tempfile, termios, time
 
 
 def child(scene, cols, rows, outfile):
     import render
-    from content import MAPS, MODES, WAR_QUOTES, build_wave
+    import terrain
+    from content import MODES, WAR_QUOTES, build_wave
     from game import WAVE, Game
+    from terrain import MAPS
     from theme import Theme
 
     def body(scr):
         curses.curs_set(0)
         theme = Theme()
         random.seed(4)
-        if scene in ("board", "compact", "level", "pause", "elite"):
+        if scene.startswith("map:") or scene in ("board", "compact", "level",
+                                                 "pause", "elite"):
             # Biggest map this window can hold, exactly as the game picks one.
-            wanted = MAPS[0] if scene == "compact" else MAPS[4]
-            g = Game(MODES[2] if scene == "level" else MODES[0], *wanted)
-            if not render.fits(rows, cols, g.h, g.w):
-                for name, art in MAPS:
-                    probe = Game(g.mode, name, art)
+            named = terrain.by_name(scene[4:]) if scene.startswith("map:") else None
+            wanted = named or (MAPS[0] if scene == "compact" else MAPS[6])
+            g = Game(MODES[2] if scene == "level" else MODES[0], wanted)
+            if named is None and not render.fits(rows, cols, g.h, g.w):
+                for m in MAPS:
+                    probe = Game(g.mode, m)
                     if render.fits(rows, cols, probe.h, probe.w):
                         g = probe
                         break
