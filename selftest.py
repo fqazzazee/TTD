@@ -6,20 +6,23 @@ Checks that need no terminal.
 
 Things worth guarding: every map on disk traces into a clean route, the ground
 under it behaves, the layout finds a sane arrangement at any plausible window
-size, and the rules produce a game that can actually be lost — a tower defense
-you cannot lose is a screensaver.
+size, the campaign holds together, and the rules produce a game that can
+actually be lost — a tower defense you cannot lose is a screensaver.
 """
 
 from __future__ import annotations
 
 import array
 import math
+import os
 import random
 import sys
+import tempfile
 from types import SimpleNamespace
 
 import audio
 import render
+import story
 import terrain as TR
 import theme as T
 from content import (BUILDINGS, ENEMIES, MODES, SPEEDS, build_wave,
@@ -140,6 +143,43 @@ edge = next(((y, x) for y in range(gterr.h - 1) for x in range(gterr.w - 1)
 check(edge is None or gterr.high_ground(*edge, cannon) == 0,
       "a footprint straddling the crest gets no bonus",
       f"anchor {edge}" if edge else "no straddling 2x2 on this map")
+
+
+# ---------------------------------------------------------------------------
+print("\nthe campaign")
+
+chaps = story.chapters()
+check(len(chaps) == len(story.CHAPTERS) and len(chaps) >= 10,
+      "every chapter has its battlefield installed",
+      f"{len(chaps)} battles")
+check([c.order for c in chaps[:5]] == ["I", "II", "III", "IV", "V"]
+      and chaps[-1].order == story.numeral(len(chaps)),
+      "chapters are numbered by where they sit, not by hand",
+      f"last is {chaps[-1].order}")
+check(all(c.mode.target for c in chaps),
+      "every chapter ends — a campaign of endless waves is a treadmill")
+check(len({c.map_name for c in chaps}) == len(chaps),
+      "no battle is fought twice")
+
+# The one thing a campaign must not do is lock the player out of it.
+prog = story.Progress(os.path.join(tempfile.gettempdir(), "ttd-selftest.json"))
+prog.cleared, prog.best = set(), {}
+check(prog.unlocked(chaps[0]) and not prog.unlocked(chaps[1])
+      and prog.next_chapter() is chaps[0],
+      "a fresh campaign opens on its first battle and no further")
+prog.record(chaps[0], won=True, score=1234)
+check(prog.unlocked(chaps[1]) and prog.is_cleared(chaps[0])
+      and prog.best[chaps[0].map_name] == 1234
+      and prog.next_chapter() is chaps[1],
+      "winning one opens the next and remembers the score")
+prog.record(chaps[1], won=False, score=99)
+check(not prog.is_cleared(chaps[1]) and prog.unlocked(chaps[1]),
+      "losing takes nothing away")
+for c in chaps:
+    prog.record(c, won=True, score=1)
+check(prog.complete and all(prog.unlocked(c) for c in chaps),
+      "and the whole campaign can be finished", f"{prog.done} battles")
+os.remove(prog.path)
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ runs the frame loop. The interesting parts live next door —
     content.py   balance numbers, game modes, quotes
     terrain.py   the map format, the ground, and every battlefield on disk
     maps/*.map   the battlefields themselves, in plain text
+    story.py     the campaign: sixteen battles and what happened at them
     game.py      the rules, with no idea a terminal exists
     render.py    layout and drawing, with no idea of the rules
     theme.py     what this particular terminal can draw, and in what colours
@@ -35,6 +36,7 @@ import time
 import audio
 import render
 import scores
+import story
 import terrain
 from content import (BUILDINGS, DEFEAT_QUOTES, MODES, VICTORY_QUOTES,
                      WAR_QUOTES)
@@ -239,18 +241,28 @@ def pick_map(rows: int, cols: int):
     return random.choice([m for m in playable if (m.h, m.w) == biggest])
 
 
-def wait_for_room(scr, theme: Theme):
-    """Nag until the window can hold a battlefield, or the player quits."""
+def wait_for_room(scr, theme: Theme, wanted=None):
+    """Nag until the window can hold a battlefield, or the player quits.
+
+    With a map named — a campaign chapter, or one the player picked — it is
+    that map or nothing. Otherwise anything that fits will do.
+    """
     scr.timeout(200)
-    if terrain.MAPS:
+    if wanted is not None:
+        need = render.smallest_need(wanted.h, wanted.w)
+    elif terrain.MAPS:
         need = render.smallest_need(*min((m.h, m.w) for m in terrain.MAPS))
     else:
         need = (80, 24)
     while True:
         rows, cols = scr.getmaxyx()
-        chosen = pick_map(rows, cols)
-        if chosen:
-            return chosen
+        if wanted is not None:
+            if render.fits(rows, cols, wanted.h, wanted.w):
+                return wanted
+        else:
+            chosen = pick_map(rows, cols)
+            if chosen:
+                return chosen
         render.draw_too_small(scr, theme, *need)
         scr.refresh()
         if scr.getch() in (ord("q"), ord("Q")):
@@ -314,6 +326,83 @@ def run_campaign(scr, theme: Theme, mode, sound, board) -> str:
         # anything else: another try, another map, another quote
 
 
+def run_story(scr, theme: Theme, sound, progress, start: int) -> str:
+    """Fight the campaign from `start` onwards. Returns 'menu' or 'quit'.
+
+    Winning carries you straight into the next battle without going back to
+    the menu, because a campaign that makes you re-select after every victory
+    is a menu with battles in it rather than the other way round. Losing
+    drops you back to the chapter list, where nothing has been taken away.
+    """
+    rows = story.chapters()
+    index = start
+    while 0 <= index < len(rows):
+        ch = rows[index]
+        chosen = wait_for_room(scr, theme, ch.field)
+        if chosen is None:
+            return "quit"
+
+        sound.music("menu")
+        best = progress.best.get(ch.map_name, 0)
+        key = render.brief_screen(
+            scr, theme,
+            header=f"{ch.order}.  {ch.title.upper()}",
+            header_attr=theme.ink("title", bold=True),
+            field_=chosen, title=ch.map_name, text=ch.brief,
+            footer=("any key to take the field   ·   Q to withdraw"
+                    + (f"      best {best:,}" if best else "")))
+        if key in (ord("q"), ord("Q"), ESC):
+            return "menu"
+
+        g = Game(ch.mode, chosen)
+        outcome = play(scr, theme, g, sound)
+        if outcome in ("menu", "quit"):
+            return outcome
+
+        won = outcome == "won"
+        progress.record(ch, won, g.score)
+        sound.music("menu")
+        if not won:
+            render.quote_scene(
+                scr, theme,
+                header="THE LINE HAS FALLEN",
+                header_attr=theme.ink("blood", bold=True),
+                quote=random.choice(DEFEAT_QUOTES),
+                subtitle=f"{ch.map_name}  ·  {g.wave} waves held  "
+                         f"·  {g.score:,} points",
+                footer="any key to go back to the campaign",
+                sound=sound)
+            return "menu"
+
+        last = index + 1 >= len(rows)
+        key = render.brief_screen(
+            scr, theme,
+            header="THE FIELD IS YOURS" if not last else "THE CAMPAIGN IS WON",
+            header_attr=theme.ink("good", bold=True),
+            field_=chosen, title="AFTERWARDS", text=ch.after,
+            footer=("ENTER for the next battle   ·   any other key for the menu"
+                    if not last else "any key to go back"))
+        if last or key in (ord("q"), ord("Q"), ESC, ord("m"), ord("M")):
+            return "menu"
+        if key not in (curses.KEY_ENTER, 10, 13, ord(" ")):
+            return "menu"
+        index += 1
+    return "menu"
+
+
+def story_menu(scr, theme: Theme, sound, progress) -> str:
+    """The campaign list, and whatever the player picks off it."""
+    while True:
+        rows = story.chapters()
+        pick = render.story_screen(scr, theme, rows, progress)
+        if pick is None:
+            return "menu"
+        sound.play("select")
+        outcome = run_story(scr, theme, sound, progress, pick)
+        if outcome == "quit":
+            return "quit"
+
+
 def record_run(scr, theme: Theme, board, g: Game, won: bool, sound) -> None:
     """File the run, and let the player sign it if it made the table."""
     entry = scores.Entry(name=scores.default_name(), mode=g.mode.name,
@@ -343,6 +432,7 @@ def app(scr) -> None:
     theme = Theme()
     sound = audio.Audio()
     board = scores.Board()
+    progress = story.Progress()
 
     try:
         while True:
@@ -353,16 +443,16 @@ def app(scr) -> None:
                 return
             if choice == "help":
                 render.help_screen(scr, theme)
-                continue
-            if choice == "scores":
+            elif choice == "scores":
                 render.scores_screen(scr, theme, board, list(MODES))
-                continue
-
-            index = render.mode_screen(scr, theme, MODES)
-            if index is None:
-                continue
-            if run_campaign(scr, theme, MODES[index], sound, board) == "quit":
-                return
+            elif choice == "story":
+                if story_menu(scr, theme, sound, progress) == "quit":
+                    return
+            elif choice == "play":
+                index = render.mode_screen(scr, theme, MODES)
+                if index is not None and run_campaign(
+                        scr, theme, MODES[index], sound, board) == "quit":
+                    return
     finally:
         sound.close()
 
