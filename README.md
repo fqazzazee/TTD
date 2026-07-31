@@ -1,5 +1,9 @@
 # TTD — Terminal Tower Defense
 
+[![GNU/Linux](https://img.shields.io/badge/GNU%2FLinux-ready-FCC624?style=flat-square&logo=linux&logoColor=black)](#linux)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Read the blog post](https://img.shields.io/badge/blog-read%20the%20post-15171A?style=flat-square&logo=ghost&logoColor=white)](https://blog.safeqbit.com/ttd-a-tower-defense-game-that-fits-in-a-lunch-break/)
+
 Creeps walk a road from `»` to your base `⌂`. You spend gold on guns beside it.
 Everything that gets through costs you lives.
 
