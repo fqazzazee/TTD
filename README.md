@@ -3,6 +3,7 @@
 [![GNU/Linux](https://img.shields.io/badge/GNU%2FLinux-ready-FCC624?style=flat-square&logo=linux&logoColor=black)](#linux)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Read the blog post](https://img.shields.io/badge/blog-read%20the%20post-15171A?style=flat-square&logo=ghost&logoColor=white)](https://blog.safeqbit.com/ttd-a-tower-defense-game-that-fits-in-a-lunch-break/)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black&style=flat-square)](https://buymeacoffee.com/fqazzazee)
 
 Creeps walk a road from `»` to your base `⌂`. You spend gold on guns beside it.
 Everything that gets through costs you lives.
@@ -131,3 +132,7 @@ alongside them in `~/.local/share/ttd/`.
 Everything else — the buildings and what they cost, the enemy, the campaign,
 how to draw a battlefield, the map editor, and how a flat grid of characters is
 made to look like ground — is in **[GUIDE.md](GUIDE.md)**.
+
+## Support
+
+If it got you through a lunch break, you can [buy me a coffee ☕](https://buymeacoffee.com/fqazzazee).
